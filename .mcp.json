@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "vibe-trading": {
+      "command": "/home/mtforestlab/projects/vibe-trading/.venv/bin/vibe-trading-mcp",
+      "args": [],
+      "env": {
+        "VIBE_TRADING_HOME": "/home/mtforestlab/.vibe-trading",
+        "VIBE_TRADING_DATA_CACHE": "1"
+      }
+    }
+  }
+}
