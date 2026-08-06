@@ -57,6 +57,15 @@ from src.market_data import (
         ("CL=F", "yahoo"),  # crude future
         ("EURUSD=X", "yahoo"),  # forex pair
         ("JPY=X", "yahoo"),
+        # Japan (JPX) and Yahoo index symbols — same failure mode as #718: an
+        # unmatched code falls to the ``tushare`` default and is handed to
+        # China-market loaders, which return ``_unresolved``.
+        ("7203.T", "yfinance"),  # Toyota
+        ("1306.T", "yfinance"),  # TOPIX ETF
+        ("^N225", "yfinance"),  # Nikkei 225
+        ("^GSPC", "yfinance"),  # S&P 500
+        ("^TNX", "yfinance"),  # US 10y yield
+        ("^HSI", "yfinance"),  # Hang Seng
         ("something_weird", "tushare"),  # documented fallback
     ],
 )

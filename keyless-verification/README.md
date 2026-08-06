@@ -1,6 +1,11 @@
 # HKUDS/Vibe-Trading — APIキーゼロで日次市況レポートは作れるか
 
-検証日: 2026-08-06 / 対象コミット: `a1bb7ac` (v0.1.13) / 検証環境: Linux, Python 3.13.14
+初回検証: 2026-08-06 / 対象コミット `a1bb7ac`
+再検証: 2026-08-07 / upstream 最新 `8452a84` にリベース後（+12コミット）
+検証環境: Linux, Python 3.13.14
+
+> **2026-08-07 更新** — upstream の12コミットに追従して §7 を再検証し、
+> §5 の日本株パッチをこのフォークに**適用済み**。変更点は [§10](#10-再検証ログ-2026-08-07) 参照。
 
 「APIキーゼロ」の定義: **LLM の APIキーも、市場データの APIキーも一切設定しない**。
 環境変数は `env -i`（あるいは `env={}`）で完全に空にした状態で実行し、`.env` は
@@ -171,19 +176,38 @@ def detect_source(code: str) -> str:
 | `USDJPY=X`, `JPY=X`, `GC=F`, `CL=F`, `EWJ.US` | ✓ | — |
 | `7203.JP`, `7203`, `N225` | ✗ | ✗（Yahoo に存在しない表記） |
 
-**回避策:** 指数と日本株には常に `source: "yfinance"` を明示する。
-`collect_bundle.py` の `BASKETS` はこの前提で書いてある。
+**素の upstream での回避策:** 指数と日本株に `source: "yfinance"` を明示する。
 
-**恒久対応（未適用・提案）:** `_SOURCE_PATTERNS` に 2 行足せば `auto` で通る。
+**このフォークでの対応（適用済み）:** `_SOURCE_PATTERNS` に 2 パターン追加した。
 
 ```python
-    (re.compile(r"^\d{4}\.T$", re.I), "yfinance"),   # 東証
+    (re.compile(r"^\d{4}\.T$", re.I), "yfinance"),    # 東証 4桁コード
     (re.compile(r"^\^[A-Z0-9]+$", re.I), "yfinance"), # ^N225 / ^GSPC などの指数
 ```
 
-加えて `FALLBACK_CHAINS` に `"jp_equity": ["yfinance", "yahoo", "local"]` を追加。
-upstream への PR 候補。**このフォークにはまだ適用していない**（検証結果を素の
-upstream 挙動として残すため）。
+これだけで `source` 指定なしの `auto` で全部通る。当初 `FALLBACK_CHAINS` への
+`jp_equity` 追加も提案したが、**実測の結果これは不要だった**ので取り下げた。理由は
+`fallback_used=False` — yfinance が第一候補として即成功するため、フォールバック
+チェーンに到達しない。`jp_equity` を機能させるには `_MARKET_PATTERNS`
+（`backtest/engines/_market_hooks.py:25`）にも追加が必要で、するとその戻り値を
+使う `composite._build_rule_engines` のエンジン選択と `_MARKET_CURRENCY` の
+通貨ガードにも手を入れることになり、バックテスト側に回帰リスクが出る。
+データ経路だけが目的なら 2 行で足りる。
+
+検証（`env -i`, 2026-08-07, `source` 未指定）:
+
+```
+7203.T  src=yfinance ->  7 bars  fallback=False      ^GSPC  src=yfinance -> 8 bars  fallback=False
+1306.T  src=yfinance ->  8 bars  fallback=False      ^DJI   src=yfinance -> 8 bars  fallback=False
+6758.T  src=yfinance ->  7 bars  fallback=False      ^IXIC  src=yfinance -> 8 bars  fallback=False
+8306.T  src=yfinance ->  7 bars  fallback=False      ^VIX   src=yfinance -> 8 bars  fallback=False
+^N225   src=yfinance ->  7 bars  fallback=False      ^TNX   src=yfinance -> 8 bars  fallback=False
+```
+
+回帰なし（`AAPL.US` / `000001.SZ` / `00700.HK` / `BTC-USDT` / `USDJPY=X` /
+`GC=F` / `005930.KS` / `RELIANCE.NS` すべて従来通り解決）。
+既存テストは `tests/test_market_data.py` + `tests/test_registry.py` で **74 passed**、
+新パターン用のケースも同ファイルに追加済み。upstream への PR 候補。
 
 ## 6. キーなしで失われるもの
 
@@ -213,7 +237,7 @@ Web セッション実行系。
 
 ## 7. 既知の癖（実測確認済み・レポート品質に直結）
 
-**A. `screen_market` の数値が 100 倍。両市場で確認。**
+**A. `screen_market` の数値が 100 倍。us / a / hk 全市場で確認、`8452a84` でも未修正。**
 `src/tools/market_screener_tool.py:71-89` の `_num` が素の `float()` で、Eastmoney の
 小数桁フィールド `f1` を要求していない（`:138-146`）。
 
@@ -230,6 +254,9 @@ a : {"code":"603468","price":3749.0,"change_pct":11472.0} → 実際は ¥37.49,
 （`registry.py:229-239`）が別クラスに差し替えている場合がある。キーなしで
 `source="finnhub"` を要求すると Yahoo のバーが `"source": "finnhub",
 "fallback_used": false` で返る。**レポートに出所を書くときは provenance を信用しない。**
+`8452a84` でも未修正。同じ実行のログには
+`finnhub is unavailable, falling back to yahoo for market us_equity` が出ており、
+差し替えを認識した上で provenance に反映していないことが確認できる。
 
 **C. `sentiment` ツールは使わないこと。** LLM ではなく約130語の ASCII 辞書
 （`src/tools/sentiment_tool.py:23-49`）。`"low"` が positive と negative の両方に
@@ -294,3 +321,63 @@ git push -u origin keyless-daily-report
 | `README.md` | 本検証レポート |
 | `collect_bundle.py` | キーゼロでレポート用データ一式を集めるスクリプト |
 | `sample-daily-report_2026-08-06.md` | 実際に生成した日次市況レポート（成果物の証拠） |
+
+## 10. 再検証ログ (2026-08-07)
+
+`a1bb7ac` → `8452a84`（upstream 最新、+12コミット）にリベース。コンフリクトなし、
+依存関係の変更なし。12コミットのうちデータ経路に関わるのは 2 件。
+
+### 10.1 upstream `#1000` が §7 の1件を潰した
+
+`31869da fix(data): repair HK fallback routing + tencent HK source` は、
+`_chain_for()` に銘柄の市場を渡すよう変更した（`FALLBACK_CHAINS` は
+ソース名の**最初の一致**で引かれていたため、`yahoo` を含む先頭の `us_equity`
+チェーンに HK 銘柄が流れ込み、US 専用ソースで試行回数を使い果たしていた）。
+併せて HK チェーンの先頭を `tencent` に変更、`max_fallback_attempts` を 3 → 5 に。
+
+再検証（`env -i`, `source` 未指定）:
+
+```
+00700.HK  -> ok 8 bars  source=tencent  fallback_used=false
+0700.HK   -> ok 8 bars  source=tencent  fallback_used=false
+09988.HK  -> ok 8 bars  source=tencent  fallback_used=false
+```
+
+**HK は解決。** 初回検証時に `screen_market(market="hk")` が3回とも
+タイムアウトしたのは別問題（Eastmoney の `push2delay` 側、§4.3）で、こちらは継続。
+
+### 10.2 変わらなかったもの
+
+| 項目 | `a1bb7ac` | `8452a84` |
+|---|---|---|
+| §5 日本株・指数の `auto` ルーティング | ✗ unresolved | ✗ 変わらず（本フォークでパッチ適用） |
+| §7-A `screen_market` 100倍 | ✗ | ✗ us/a/hk 全部で再現 |
+| §7-B `_provenance` の虚偽 | ✗ | ✗ 変わらず |
+| §7 `source="local"` が通信する | ✗ | ✗ 変わらず（`fallback_used: true` で tencent が応答） |
+| §6 `get_macro_series` の FRED キー必須 | ✗ | ✗ 変わらず |
+
+### 10.3 暗号資産
+
+`8452a84 fix(backtest): route yfinance crypto to CryptoEngine (#970)` は
+バックテストのエンジン選択の修正で、データ取得には効かない。
+
+```
+BTC-USDT -> 9 bars, last=2026-08-05   （2日遅れは継続）
+BTC-USD  -> 0 bars                     （yfinance 表記はデータ経路では解決しない）
+```
+
+`_MARKET_PATTERNS` は `BTC-USD` を crypto と認識するが、`detect_source` の
+`_SOURCE_PATTERNS` には `-USD` のパターンが無く `tushare` に落ちる。
+日次レポートには `-USDT` 表記を使うこと。
+
+### 10.4 このフォークの差分
+
+```
+3faa5af Add keyless daily-report verification harness
+  + .mcp.json
+  + keyless-verification/{README.md,collect_bundle.py,sample-daily-report_2026-08-06.md}
+<次コミット> JP パッチ
+  M agent/src/market_data.py         _SOURCE_PATTERNS に 2 パターン
+  M agent/tests/test_market_data.py  対応する 6 ケース
+  M keyless-verification/collect_bundle.py  source 固定を撤去
+```

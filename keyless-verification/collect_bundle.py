@@ -6,15 +6,12 @@ genuinely empty environment to prove no credential leaks in:
 
     env -i HOME=$HOME PATH=/usr/bin:/bin .venv/bin/python keyless-verification/collect_bundle.py
 
-Two routing facts drive the BASKETS table below:
-
-* ``market_data.detect_source`` (agent/src/market_data.py:49-54) falls through
-  to ``tushare`` for anything its regex table misses. There is no pattern for
-  Tokyo ``.T`` codes or for caret-prefixed indices, and no ``jp_equity`` entry
-  in ``FALLBACK_CHAINS``, so those symbols never reach yfinance and come back
-  under ``_unresolved``. Pinning ``source="yfinance"`` bypasses the table.
-* Yahoo's ``=X`` / ``=F`` suffixes and the ``-USDT`` crypto form *are* in the
-  table, so they route correctly under ``auto``.
+Every symbol routes under ``source="auto"``. On stock upstream it does not:
+``market_data.detect_source`` falls through to ``tushare`` for anything its
+regex table misses, and the table has no pattern for Tokyo ``.T`` codes or for
+caret-prefixed indices, so those symbols are handed to China-market loaders and
+come back under ``_unresolved``. This fork adds the two missing patterns — see
+the ``Japan`` / ``Yahoo index symbols`` entries in ``_SOURCE_PATTERNS``.
 """
 from __future__ import annotations
 
@@ -27,15 +24,14 @@ import sys
 import mcp_server
 from fastmcp import Client
 
-# (label, codes, source) — pin the source wherever detect_source() misroutes.
-BASKETS: list[tuple[str, list[str], str]] = [
-    ("JP equity", ["^N225", "1306.T", "7203.T", "6758.T", "8306.T"], "yfinance"),
-    ("US equity", ["^GSPC", "^IXIC", "^DJI", "^VIX"], "yfinance"),
-    ("Asia ex-JP", ["^HSI"], "yfinance"),
-    ("Rates", ["^TNX"], "yfinance"),
-    ("FX", ["USDJPY=X", "EURJPY=X"], "auto"),
-    ("Commodities", ["GC=F", "CL=F"], "auto"),
-    ("Crypto", ["BTC-USDT", "ETH-USDT"], "auto"),
+BASKETS: list[tuple[str, list[str]]] = [
+    ("JP equity", ["^N225", "1306.T", "7203.T", "6758.T", "8306.T"]),
+    ("US equity", ["^GSPC", "^IXIC", "^DJI", "^VIX"]),
+    ("Asia ex-JP", ["^HSI"]),
+    ("Rates", ["^TNX"]),
+    ("FX", ["USDJPY=X", "EURJPY=X"]),
+    ("Commodities", ["GC=F", "CL=F"]),
+    ("Crypto", ["BTC-USDT", "ETH-USDT"]),
 ]
 
 NEWS_SYMBOLS = ["AAPL.US", "NVDA.US"]
@@ -65,10 +61,9 @@ async def collect(start: str, end: str) -> dict:
     }
 
     async with Client(mcp_server.mcp) as client:
-        for label, codes, source in BASKETS:
+        for label, codes in BASKETS:
             payload = json.loads(await _call(client, "get_market_data", {
-                "codes": codes, "start_date": start, "end_date": end,
-                "source": source, "max_rows": 0,
+                "codes": codes, "start_date": start, "end_date": end, "max_rows": 0,
             }))
             bundle["unresolved"] += payload.pop("_unresolved", [])
             for symbol, entry in payload.items():

@@ -23,6 +23,14 @@ _SOURCE_PATTERNS = [
     (re.compile(r"^\d{6}\.(SZ|SH|BJ)$", re.I), "tencent"),
     (re.compile(r"^[A-Z]+\.US$", re.I), "yahoo"),
     (re.compile(r"^\d{3,5}\.HK$", re.I), "tencent"),
+    # Japan: Tokyo Stock Exchange 4-digit codes (7203.T, 1306.T). yfinance is
+    # the only loader in the set that serves JPX, so route straight to it —
+    # without this the code falls through to the ``tushare`` default below and
+    # is handed to China-market loaders that cannot resolve it.
+    (re.compile(r"^\d{4}\.T$", re.I), "yfinance"),
+    # Yahoo index symbols (^N225, ^GSPC, ^DJI, ^IXIC, ^VIX, ^HSI, ^TNX). Same
+    # failure mode as Japan: unmatched here means routed to China loaders.
+    (re.compile(r"^\^[A-Z0-9]+$", re.I), "yfinance"),
     # India: NSE (RELIANCE.NS) / BSE (500325.BO). Tickers may carry '&' and '-'
     # (e.g. M&M.NS, BAJAJ-AUTO.NS). Served by Yahoo's public chart endpoint.
     (re.compile(r"^[A-Z0-9&.\-]+\.(NS|BO)$", re.I), "yahoo"),
