@@ -23,11 +23,15 @@ _SOURCE_PATTERNS = [
     (re.compile(r"^\d{6}\.(SZ|SH|BJ)$", re.I), "tencent"),
     (re.compile(r"^[A-Z]+\.US$", re.I), "yahoo"),
     (re.compile(r"^\d{3,5}\.HK$", re.I), "tencent"),
-    # Japan: Tokyo Stock Exchange 4-digit codes (7203.T, 1306.T). yfinance is
-    # the only loader in the set that serves JPX, so route straight to it —
-    # without this the code falls through to the ``tushare`` default below and
-    # is handed to China-market loaders that cannot resolve it.
-    (re.compile(r"^\d{4}\.T$", re.I), "yfinance"),
+    # Japan (JPX). Codes are digit-led and 4 or 5 characters, and since the
+    # 2024 alphanumeric rollout the tail may contain letters — 7203.T (Toyota),
+    # 285A.T (Kioxia), 25935.T. Against JPX's own listing master there are 3535
+    # four-digit, 171 alphanumeric and 7 five-character domestic equities, so a
+    # ``^\d{4}\.T$`` rule silently drops 178 issues. yfinance is the only loader
+    # in the set that serves JPX; without this the code falls through to the
+    # ``tushare`` default below and is handed to China-market loaders, which
+    # demand a token and cannot resolve it either way.
+    (re.compile(r"^[0-9][0-9A-Z]{3,4}\.T$", re.I), "yfinance"),
     # Yahoo index symbols (^N225, ^GSPC, ^DJI, ^IXIC, ^VIX, ^HSI, ^TNX). Same
     # failure mode as Japan: unmatched here means routed to China loaders.
     (re.compile(r"^\^[A-Z0-9]+$", re.I), "yfinance"),

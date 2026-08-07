@@ -62,6 +62,10 @@ from src.market_data import (
         # China-market loaders, which return ``_unresolved``.
         ("7203.T", "yfinance"),  # Toyota
         ("1306.T", "yfinance"),  # TOPIX ETF
+        ("285A.T", "yfinance"),  # Kioxia — post-2024 alphanumeric code
+        ("130A.T", "yfinance"),
+        ("25935.T", "yfinance"),  # five-character code (7 exist on JPX)
+        ("AAPL.T", "tushare"),  # letter-led: not a JPX code, must not match
         ("^N225", "yfinance"),  # Nikkei 225
         ("^GSPC", "yfinance"),  # S&P 500
         ("^TNX", "yfinance"),  # US 10y yield
