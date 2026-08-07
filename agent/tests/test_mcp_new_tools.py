@@ -329,6 +329,7 @@ def test_one_broken_tool_module_costs_only_its_own_tool(monkeypatch, caplog) -> 
         "get_institutional_holdings",
         "etf_holdings",
         "prediction_market",
+        "jp_earnings",
     }, f"one broken module took down more than its own tool: survivors={sorted(surviving)}"
     assert any("research_papers_tool" in record.message for record in caplog.records)
 

@@ -583,7 +583,75 @@ def _classify_market(code: str) -> str | None:
         return "us"
     if suffix == "HK":
         return "hk"
+    if suffix == "T":
+        return "jp"
     return None
+
+
+# Statement -> the Yahoo fundamentals-timeseries concepts that make it up.
+# Yahoo prefixes each key with the period ("annualTotalRevenue"), so these are
+# stored bare and joined at request time. Values arrive in absolute JPY for a
+# JPX listing, not the millions-of-yen unit the filing itself prints.
+_JP_CONCEPTS: dict[str, tuple[str, ...]] = {
+    "income": (
+        "TotalRevenue", "OperatingIncome", "PretaxIncome", "NetIncome",
+        "BasicEPS", "DilutedEPS", "GrossProfit",
+    ),
+    "balance": (
+        "TotalAssets", "TotalLiabilitiesNetMinorityInterest",
+        "StockholdersEquity", "CashAndCashEquivalents", "TotalDebt",
+    ),
+    "cashflow": (
+        "OperatingCashFlow", "InvestingCashFlow", "FinancingCashFlow", "FreeCashFlow",
+    ),
+    "indicators": (
+        "TotalRevenue", "NetIncome", "DilutedEPS", "OperatingCashFlow",
+        "StockholdersEquity",
+    ),
+}
+
+# Yahoo rejects a period1 of 0; ten years of history is more than any report
+# needs and keeps the payload small.
+_JP_HISTORY_YEARS = 10
+
+
+def _fetch_yahoo_timeseries_statement(
+    code: str, *, statement: str, period: str
+) -> dict[str, Any]:
+    """Fetch a Japanese listing's statement from Yahoo fundamentals-timeseries.
+
+    SEC EDGAR covers only US registrants and Eastmoney's report API is keyed by
+    Chinese/HK report names, so neither of the existing backends can serve JPX.
+    """
+    import time as _time
+
+    from backtest.loaders.yahoo_client import get_fundamentals_timeseries
+
+    prefix = "annual" if period == "annual" else "quarterly"
+    types = [f"{prefix}{concept}" for concept in _JP_CONCEPTS[statement]]
+    now = int(_time.time())
+    try:
+        series = get_fundamentals_timeseries(
+            code, types, start=now - _JP_HISTORY_YEARS * 365 * 24 * 3600, end=now
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced as an error envelope upstream
+        logger.warning("yahoo timeseries failed for %s: %s", code, exc)
+        return {"error": f"yahoo fundamentals-timeseries failed: {exc}"}
+    if not series:
+        return {"error": f"no {period} {statement} data for {code}"}
+
+    # Pivot type-keyed series into period-keyed rows, which is the shape the
+    # other two backends already return.
+    rows: dict[str, dict[str, Any]] = {}
+    for type_key, points in series.items():
+        concept = type_key[len(prefix):]
+        for point in points:
+            rows.setdefault(point["date"], {"period_end": point["date"]})[concept] = point["value"]
+    return {
+        "currency": "JPY",
+        "unit": "absolute",
+        "periods": [rows[date] for date in sorted(rows, reverse=True)],
+    }
 
 
 class FinancialStatementsTool(BaseTool):
@@ -593,9 +661,12 @@ class FinancialStatementsTool(BaseTool):
     description = (
         "Fetch a single stock's financial statements: balance sheet, income "
         "statement, cash-flow statement, or key per-period indicators (margins, "
-        "ROE, EPS, etc.). Markets: A-share (.SH/.SZ/.BJ), US (.US) and "
-        "Hong Kong (.HK). US uses SEC EDGAR companyfacts; A-share and HK use "
-        "Eastmoney. Reports come back newest-first as flat per-period rows. Use "
+        "ROE, EPS, etc.). Markets: A-share (.SH/.SZ/.BJ), US (.US), "
+        "Hong Kong (.HK) and Japan (.T). US uses SEC EDGAR companyfacts; "
+        "A-share and HK use Eastmoney; Japan uses Yahoo's fundamentals "
+        "timeseries and returns absolute yen (not the millions-of-yen unit a "
+        "Japanese filing prints). "
+        "Reports come back newest-first as flat per-period rows. Use "
         'this to read fundamentals before building a valuation or screen. Example: '
         '{"code": "600519.SH", "statement": "income", "period": "annual"}.'
     )
@@ -673,12 +744,17 @@ class FinancialStatementsTool(BaseTool):
         market = _classify_market(code)
         if market is None:
             return _error(
-                "code must carry a supported suffix: .SH/.SZ/.BJ, .US, or .HK"
+                "code must carry a supported suffix: .SH/.SZ/.BJ, .US, .HK, or .T"
             )
 
         if market == "us":
             result = _fetch_sec_statement(code, statement=statement, period=period)
             source = "sec_edgar"
+        elif market == "jp":
+            result = _fetch_yahoo_timeseries_statement(
+                code, statement=statement, period=period
+            )
+            source = "yahoo_timeseries"
         else:
             result = _fetch_eastmoney_statement(
                 code, statement=statement, period=period

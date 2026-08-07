@@ -49,6 +49,9 @@ _CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
 _QUOTE_SUMMARY_BASE = "https://query2.finance.yahoo.com/v10/finance/quoteSummary"
 _OPTIONS_BASE = "https://query2.finance.yahoo.com/v7/finance/options"
 _SEARCH_BASE = "https://query2.finance.yahoo.com/v1/finance/search"
+_TIMESERIES_BASE = (
+    "https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries"
+)
 _CRUMB_URL = "https://query2.finance.yahoo.com/v1/test/getcrumb"
 # Hitting fc.yahoo.com first hands back the consent/session cookie the crumb
 # endpoint then validates.
@@ -412,3 +415,63 @@ def search_news(query: str, count: int) -> List[Dict[str, Any]]:
     )
     news = (payload or {}).get("news") or []
     return [item for item in news if isinstance(item, dict)]
+
+
+def get_fundamentals_timeseries(
+    symbol: str, types: List[str], *, start: int, end: int
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Fetch fundamentals from the timeseries endpoint.
+
+    This is the surface that carries statements for listings SEC EDGAR does not
+    cover — notably JPX, where figures come back in absolute yen rather than the
+    millions-of-yen unit Japanese filings print. It needs no crumb and sets no
+    cookie, unlike quoteSummary.
+
+    Args:
+        symbol: Project-side symbol (mapped via :func:`map_symbol`).
+        types: Yahoo type keys, e.g. ``["annualTotalRevenue", "annualNetIncome"]``.
+            The period prefix (``annual``/``quarterly``) is part of the key.
+        start: Unix timestamp lower bound.
+        end: Unix timestamp upper bound.
+
+    Returns:
+        ``{type_key: [{"date": "YYYY-MM-DD", "value": float}, ...]}``, omitting
+        type keys Yahoo returned nothing for.
+
+    Raises:
+        requests.RequestException: On a network/HTTP failure.
+    """
+    yahoo_symbol = map_symbol(symbol)
+    payload = throttled_get_json(
+        f"{_TIMESERIES_BASE}/{yahoo_symbol}",
+        host_key=HOST_KEY,
+        min_interval=_min_interval(),
+        params={
+            "symbol": yahoo_symbol,
+            "type": ",".join(types),
+            "period1": start,
+            "period2": end,
+        },
+    )
+    results = ((payload or {}).get("timeseries") or {}).get("result") or []
+
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for entry in results:
+        if not isinstance(entry, dict):
+            continue
+        # Each result carries its own type key plus a parallel list of cells.
+        key = next((k for k in entry.get("meta", {}).get("type", []) if k in types), None)
+        if key is None:
+            continue
+        points = []
+        for cell in entry.get(key) or []:
+            if not isinstance(cell, dict):
+                continue
+            reported = cell.get("reportedValue") or {}
+            value = reported.get("raw") if isinstance(reported, dict) else None
+            if value is None or not cell.get("asOfDate"):
+                continue
+            points.append({"date": cell["asOfDate"], "value": value})
+        if points:
+            out[key] = points
+    return out

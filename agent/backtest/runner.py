@@ -604,6 +604,7 @@ _MARKET_TO_SOURCE = {
     "a_share": "tushare",
     "us_equity": "yfinance",
     "hk_equity": "yfinance",
+    "jp_equity": "yfinance",
     "india_equity": "yahoo",
     "kr_equity": "pykrx",
     "crypto": "okx",

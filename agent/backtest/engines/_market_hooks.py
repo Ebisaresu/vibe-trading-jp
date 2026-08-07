@@ -32,6 +32,11 @@ _MARKET_PATTERNS = [
     (re.compile(r"^[A-Z0-9&.\-]+\.(NS|BO)$", re.I), "india_equity"),
     # Korea equities: KOSPI (005930.KS) / KOSDAQ (247540.KQ), 6-digit codes.
     (re.compile(r"^\d{6}\.(KS|KQ)$", re.I), "kr_equity"),
+    # Japan (JPX). Digit-led, 4 or 5 characters; the tail may carry letters
+    # since the 2024 alphanumeric rollout (285A.T). Must stay ahead of nothing
+    # in particular, but note the default below is a_share — before this rule
+    # existed every Tokyo listing was priced and settled as if it were Chinese.
+    (re.compile(r"^[0-9][0-9A-Z]{3,4}\.T$", re.I), "jp_equity"),
     (re.compile(r"^[A-Z]+-USDT$", re.I), "crypto"),
     (re.compile(r"^[A-Z]+/USDT$", re.I), "crypto"),
     # yfinance's native crypto spelling (BTC-USD, ETH-USD). Distinct from
@@ -50,6 +55,25 @@ _MARKET_PATTERNS = [
     (re.compile(r"^[A-Z]{6}\.FX$"), "forex"),
 ]
 
+# Yahoo index symbols, which carry no exchange suffix to classify by. Without
+# these every index fell to the a_share default, so pairing a Tokyo name with
+# the Nikkei in one composite run passed the currency guard by both sides being
+# wrongly CNY — and would start failing the moment .T was classified correctly.
+_INDEX_MARKETS: dict[str, str] = {
+    "^N225": "jp_equity",
+    "^TPX": "jp_equity",
+    "^GSPC": "us_equity",
+    "^DJI": "us_equity",
+    "^IXIC": "us_equity",
+    "^RUT": "us_equity",
+    "^VIX": "us_equity",
+    "^TNX": "us_equity",
+    "^HSI": "hk_equity",
+    "^KS11": "kr_equity",
+    "^BSESN": "india_equity",
+    "^NSEI": "india_equity",
+}
+
 _CHINA_EXCHANGES = {"CFFEX", "SHFE", "DCE", "ZCE", "INE", "GFEX"}
 
 # Settlement currency per market. A composite backtest holds one shared capital
@@ -61,6 +85,7 @@ _MARKET_CURRENCY = {
     "hk_equity": "HKD",
     "india_equity": "INR",
     "kr_equity": "KRW",
+    "jp_equity": "JPY",
     # Every crypto pattern in _MARKET_PATTERNS is USDT-quoted, and USDT is
     # carried at its USD peg. This is the one approximation in the table: a
     # depeg would make a crypto+US book wrong by the depeg amount, which is
@@ -132,6 +157,9 @@ def _detect_market(code: str) -> str:
         Market type (a_share/us_equity/hk_equity/crypto/futures/forex);
         unknown defaults to ``a_share``.
     """
+    indexed = _INDEX_MARKETS.get(code.upper())
+    if indexed is not None:
+        return indexed
     for pattern, market in _MARKET_PATTERNS:
         if pattern.match(code):
             return market

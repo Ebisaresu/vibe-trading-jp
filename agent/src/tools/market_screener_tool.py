@@ -38,6 +38,11 @@ _MARKET_FS: dict[str, str] = {
     "hk": "m:116,m:113,m:114,m:115,m:128",
 }
 
+# Japan is screened without Eastmoney — its Tokyo endpoints are not dependable
+# from outside the mainland (push2 returned non-JSON on every attempt here,
+# push2delay ~50% with 15-19s timeouts). See :mod:`._jp_screener`.
+_VALID_MARKETS: tuple[str, ...] = tuple(_MARKET_FS) + ("jp",)
+
 # Sort-key -> Eastmoney field id. f3 = change percent, f5 = traded volume (lots),
 # f6 = turnover value / amount (currency), f8 = turnover rate (percent).
 _SORT_FID: dict[str, str] = {
@@ -173,7 +178,11 @@ class MarketScreenerTool(BaseTool):
         "ranked by a chosen metric: percent change, traded volume, turnover "
         "value (amount) or turnover rate. Use this to find today's biggest "
         "movers or most-actively-traded names without fetching every symbol. "
-        "Markets: A-share ('a'), US ('us'), Hong Kong ('hk'). "
+        "Markets: A-share ('a'), US ('us'), Hong Kong ('hk'), Japan ('jp'). "
+        "Japan additionally returns market breadth (advancers/decliners) with "
+        "Japanese company names, TSE segment and 33-sector, and takes a "
+        "'universe' argument; its counts are approximate and carry a coverage "
+        "denominator. "
         'Example: {"market": "a", "sort_by": "change_pct", "top_n": 20}.'
     )
     parameters = {
@@ -181,12 +190,26 @@ class MarketScreenerTool(BaseTool):
         "properties": {
             "market": {
                 "type": "string",
-                "enum": ["a", "us", "hk"],
+                "enum": list(_VALID_MARKETS),
                 "description": (
                     "Market universe to screen: 'a' = China A-share "
                     "(SH/SZ/ChiNext/Beijing), 'us' = US (NASDAQ/NYSE/AMEX), "
-                    "'hk' = Hong Kong."
+                    "'hk' = Hong Kong, 'jp' = Japan (JPX/TSE)."
                 ),
+            },
+            "universe": {
+                "type": "string",
+                "enum": ["topix500", "prime", "all"],
+                "description": (
+                    "Japan only. 'topix500' (default, ~492 issues, ~5s) is "
+                    "enough to read the market's direction; 'prime' is ~1558 "
+                    "and 'all' ~3713 domestic equities, both materially slower."
+                ),
+                "default": "topix500",
+            },
+            "as_of": {
+                "type": "string",
+                "description": "Japan only. Report date as YYYY-MM-DD; defaults to today in Tokyo.",
             },
             "sort_by": {
                 "type": "string",
@@ -210,6 +233,26 @@ class MarketScreenerTool(BaseTool):
     }
     repeatable = True
 
+    @staticmethod
+    def _screen_japan(kwargs: dict[str, Any], *, sort_by: str, top_n: int) -> str:
+        """Screen Japan via the JPX universe rather than Eastmoney."""
+        from src.tools._jp_screener import screen_japan
+
+        try:
+            payload = screen_japan(
+                sort_by=sort_by,
+                top_n=top_n,
+                universe=str(kwargs.get("universe") or "topix500"),
+                as_of=(str(kwargs["as_of"]) if kwargs.get("as_of") else None),
+            )
+        except Exception as exc:  # noqa: BLE001 - surface as the error envelope
+            logger.warning("jp market screen failed for %s: %s", sort_by, exc)
+            return _error(str(exc))
+        return json.dumps(
+            {"ok": True, "market": "jp", "source": "jpx+yahoo", "data": payload},
+            ensure_ascii=False,
+        )
+
     def execute(self, **kwargs: Any) -> str:
         """Validate inputs, screen the market, and return a JSON envelope.
 
@@ -225,8 +268,8 @@ class MarketScreenerTool(BaseTool):
             so the envelope matches every other tool's ``data:{...}`` shape.
         """
         market = kwargs.get("market")
-        if not isinstance(market, str) or market not in _MARKET_FS:
-            return _error(f"market must be one of {list(_MARKET_FS)}")
+        if not isinstance(market, str) or market not in _VALID_MARKETS:
+            return _error(f"market must be one of {list(_VALID_MARKETS)}")
 
         sort_by = kwargs.get("sort_by", "change_pct")
         if sort_by not in _SORT_FID:
@@ -236,6 +279,9 @@ class MarketScreenerTool(BaseTool):
         if not isinstance(top_n, int) or isinstance(top_n, bool) or top_n < 1:
             return _error("top_n must be a positive integer")
         top_n = min(top_n, _MAX_TOP_N)
+
+        if market == "jp":
+            return self._screen_japan(kwargs, sort_by=sort_by, top_n=top_n)
 
         try:
             rows = _screen_market(market, sort_by=sort_by, top_n=top_n)

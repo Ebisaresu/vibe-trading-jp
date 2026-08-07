@@ -224,7 +224,7 @@ class DataLoader:
     """Fetch HK/US equity bars from Yahoo Finance via yfinance."""
 
     name = "yfinance"
-    markets = {"us_equity", "hk_equity", "india_equity", "kr_equity", "crypto"}
+    markets = {"us_equity", "hk_equity", "jp_equity", "india_equity", "kr_equity", "crypto"}
     requires_auth = False
 
     def is_available(self) -> bool:

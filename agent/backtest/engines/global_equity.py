@@ -48,23 +48,31 @@ class GlobalEquityEngine(BaseEngine):
         self.hk_commission: float = config.get("hk_commission", 0.00015)
         self.hk_levy: float = config.get("hk_levy", 0.0000565)
         self.hk_settlement: float = config.get("hk_settlement", 0.00002)
+        # JP defaults. JPX trades in 100-share units like HK, but carries no
+        # stamp duty or exchange levy — the cost is the broker's commission
+        # alone, which varies enough that the default is a plain bp figure.
+        self.slippage_jp: float = config.get("slippage_jp", 0.0008)
+        self.jp_commission: float = config.get("jp_commission", 0.0005)
 
     def can_execute(self, symbol: str, direction: int, bar: pd.Series) -> bool:
-        """US/HK: T+0, both directions allowed."""
+        """US/HK/JP: T+0 in-model, both directions allowed."""
         return True
 
     def round_size(self, raw_size: float, price: float) -> float:
-        """US: fractional shares (0.01). HK: 100-share lots."""
-        if self.market == "hk":
+        """US: fractional shares (0.01). HK and JP: 100-share lots."""
+        if self.market in ("hk", "jp"):
             return max(int(raw_size / 100) * 100, 0)
         return round(max(raw_size, 0.0), 2)
 
     def calc_commission(self, size: float, price: float, _direction: int, is_open: bool) -> float:
-        """US: zero commission. HK: stamp tax + levies.
+        """US: zero commission. HK: stamp tax + levies. JP: broker commission.
 
         ``_direction`` is unused — reserved for future short-borrow fees
         (US Reg-T margin, HK SBL costs).
         """
+        if self.market == "jp":
+            # No stamp duty or exchange levy on JPX cash equities.
+            return size * price * self.jp_commission
         if self.market == "hk":
             notional = size * price
             comm = notional * self.hk_commission       # broker commission
@@ -76,6 +84,8 @@ class GlobalEquityEngine(BaseEngine):
         return 0.0
 
     def apply_slippage(self, price: float, direction: int) -> float:
-        """US: low slippage. HK: moderate slippage."""
-        rate = self.slippage_hk if self.market == "hk" else self.slippage_us
+        """US: low slippage. HK and JP: moderate slippage."""
+        rate = {"hk": self.slippage_hk, "jp": self.slippage_jp}.get(
+            self.market, self.slippage_us
+        )
         return price * (1 + direction * rate)

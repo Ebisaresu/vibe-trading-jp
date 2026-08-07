@@ -1707,18 +1707,23 @@ def get_options_chain(ticker: str, expiration: int | None = None) -> str:
 
 @mcp.tool
 def get_stock_profile(ticker: str, sections: list[str] | None = None) -> str:
-    """Fetch a read-only company profile for a US or HK listing (Yahoo Finance).
+    """Fetch a read-only company profile for a US, HK or Japanese listing.
 
-    Returns valuation key statistics, analyst price targets and
-    earnings/revenue estimates, institutional and insider ownership, and the
-    analyst recommendation trend. Use this for fundamentals and consensus
-    context, not for OHLCV price bars (use get_market_data).
+    Backed by Yahoo Finance. Returns valuation key statistics, analyst price
+    targets and earnings/revenue estimates, institutional and insider
+    ownership, the analyst recommendation trend, the next earnings date, and
+    per-quarter EPS actual-vs-consensus history. Use this for fundamentals and
+    consensus context, not for OHLCV price bars (use get_market_data).
 
     Args:
-        ticker: US (bare or .US suffix) or HK (zero-padded .HK code) symbol.
+        ticker: US (bare or .US suffix), HK (zero-padded .HK code), or Japanese
+            (JPX code with a .T suffix — 7203.T, and alphanumeric codes such as
+            285A.T) symbol.
         sections: Profile sections to return, any of: key_stats, financials,
             earnings_trend, institution_ownership, insider_holders,
-            recommendation_trend. Defaults to all sections.
+            recommendation_trend, calendar, earnings_history. Defaults to all
+            sections. "calendar" carries an is_estimate flag — when true the
+            date is Yahoo's extrapolation, not one the company announced.
     """
     params: dict[str, Any] = {"ticker": ticker}
     clean_sections = _clean_list(sections)
@@ -1851,6 +1856,7 @@ _MIRRORED_TOOL_SOURCES = (
     ("src.tools.etf_holdings_tool", "EtfHoldingsTool"),
     ("src.tools.prediction_market_tool", "PredictionMarketTool"),
     ("src.tools.research_papers_tool", "ResearchPapersTool"),
+    ("src.tools.jp_earnings_tool", "JapanEarningsTool"),
 )
 
 

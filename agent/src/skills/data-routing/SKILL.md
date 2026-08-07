@@ -57,13 +57,14 @@ is required only where listed (no key listed = free / no auth).
 | Lockup expiry (限售解禁) | `get_lockup_expiry` | A-share | — |
 | Sector / board taxonomy (板块) | `get_sector_info` | A-share | — |
 | Sell-side research reports | `get_research_reports` | A-share | — |
-| Stock news | `get_stock_news` | A-share, US, HK | — |
+| Stock news | `get_stock_news` | A-share, US, HK, Japan | — |
 | SEC filings (EDGAR) | `get_sec_filings` | US | — |
-| Financial statements | `get_financial_statements` | A-share, US, HK | — |
+| Financial statements | `get_financial_statements` | A-share, US, HK, Japan | — |
 | Options chain | `get_options_chain` | US | — |
-| Stock profile / fundamentals | `get_stock_profile` | US | — |
-| Market screen | `screen_market` | A-share | — |
-| Symbol search | `search_symbol` | A-share, US | — |
+| Stock profile / fundamentals | `get_stock_profile` | US, HK, Japan | — |
+| Market screen | `screen_market` | A-share, US, HK, Japan | — |
+| Symbol search | `search_symbol` | A-share, US, Japan | — |
+| Japan earnings events | `jp_earnings` | Japan | — |
 | Macro / FRED series | `get_macro_series` | Macro (US/global) | `FRED_API_KEY` |
 | iWenCai NL search (问财) | `iwencai_search` | A-share | `VIBE_TRADING_IWENCAI_KEY` |
 
@@ -71,10 +72,16 @@ Notes:
 - `get_financial_statements` reads US statements from SEC EDGAR companyfacts
   (ticker -> CIK -> XBRL concepts) and A-share/HK statements from the Eastmoney
   datacenter report API (per-market F10 report names).
-- `get_stock_news` routes A-share (SH/SZ/BJ) to an Eastmoney news client and
-  US (.US) / HK (.HK) to a Yahoo search client; a failure on one upstream is
-  returned as an error envelope, never raised, so a single bad symbol never
-  aborts a batch.
+- `get_stock_news` routes A-share (SH/SZ/BJ) to an Eastmoney news client,
+  US (.US) / HK (.HK) to a Yahoo search client, and Japan (.T) to the
+  symbol-keyed yfinance news feed with a kabutan fallback; a failure on one
+  upstream is returned as an error envelope, never raised, so a single bad
+  symbol never aborts a batch.
+- Japan routes to Yahoo/yfinance throughout — there is no keyless Chinese-vendor
+  coverage of JPX, and Eastmoney's Tokyo endpoints are not dependable. The
+  `screen_market` Japan universe is built from JPX's own listing master instead.
+- `jp_earnings` is the event surface for Japan: TDnet 適時開示 for what was filed
+  today (決算短信 and 業績予想の修正), plus next-earnings dates and EPS surprise.
 
 ## Decision Tree
 

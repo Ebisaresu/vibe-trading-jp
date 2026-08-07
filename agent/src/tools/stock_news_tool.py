@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -43,6 +44,19 @@ _EM_NEWS_URL = "https://search-api-web.eastmoney.com/search/jsonp"
 _EM_SUFFIXES = ("SH", "SZ", "BJ")
 # Suffixes that route to Yahoo's search-news surface.
 _YAHOO_SUFFIXES = ("US", "HK")
+# Japan (JPX). Yahoo's v1 search endpoint is NAME-keyed and cannot be handed a
+# JPX code — searching "7203" returns nothing useful and a kanji name makes it
+# reply HTTP 400. The yfinance news feed is SYMBOL-keyed, so it takes "7203.T"
+# directly, including post-2024 alphanumeric codes like "285A.T".
+_JP_SUFFIXES = ("T",)
+
+# Coverage is skewed toward globally-followed names: 7974.T returns 9/10
+# on-topic headlines, 8306.T closer to 2/10, because the feed is
+# English-language and US-editorial. Kabutan backfills the domestic names.
+_KABUTAN_URL = "https://kabutan.jp/stock/news"
+_KABUTAN_HOST_KEY = "kabutan"
+_KABUTAN_MIN_INTERVAL = 1.0
+_KABUTAN_TIMEOUT = 20.0
 
 # Default broad-market query used when ``scope='global'`` carries no code.
 _GLOBAL_QUERY = "财经"
@@ -242,6 +256,115 @@ def _fetch_yahoo_news(query: str, limit: int) -> list[dict[str, Any]]:
     ][:limit]
 
 
+def _fetch_yfinance_news(symbol: str, limit: int) -> list[dict[str, Any]]:
+    """Fetch Japanese-listing news from the symbol-keyed yfinance feed.
+
+    Args:
+        symbol: Full symbol including suffix, e.g. ``"7203.T"``.
+        limit: Maximum number of records to return.
+
+    Returns:
+        Compact article records; empty when the feed has nothing.
+    """
+    import yfinance as yf
+
+    out: list[dict[str, Any]] = []
+    for item in (yf.Ticker(symbol).news or [])[:limit]:
+        if not isinstance(item, dict):
+            continue
+        # yfinance nests the payload under "content" on current versions and
+        # returns it flat on older ones.
+        body = item.get("content") if isinstance(item.get("content"), dict) else item
+        provider = body.get("provider")
+        source = provider.get("displayName") if isinstance(provider, dict) else provider
+        url = body.get("canonicalUrl") or body.get("clickThroughUrl") or {}
+        out.append({
+            "title": str(body.get("title") or "").strip(),
+            "url": (url.get("url") if isinstance(url, dict) else url) or body.get("link"),
+            "source": source or "yahoo",
+            "published": body.get("pubDate") or body.get("displayTime"),
+            "snippet": _snippet(body.get("summary") or body.get("description") or ""),
+        })
+    return [a for a in out if a["title"]]
+
+
+def _strip_html(fragment: str) -> str:
+    """Strip tags and collapse whitespace, including the &nbsp; kabutan emits."""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", fragment).replace("\xa0", " ")).strip()
+
+
+_KABUTAN_TABLE_RE = re.compile(
+    # Class TOKEN match: the real attribute is "s_news_list mgbt0", so anchoring
+    # on the exact value finds nothing.
+    r'<table[^>]*class="[^"]*\bs_news_list\b[^"]*"[^>]*>(.*?)</table>', re.S
+)
+_KABUTAN_ROW_RE = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S)
+_KABUTAN_TIME_RE = re.compile(r'<time[^>]*datetime="([^"]+)"')
+_KABUTAN_CTG_RE = re.compile(r'<div[^>]*class="[^"]*\bnewslist_ctg\b[^"]*"[^>]*>(.*?)</div>', re.S)
+_KABUTAN_LINK_RE = re.compile(r'<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
+
+
+def _fetch_kabutan_news(code: str, limit: int) -> list[dict[str, Any]]:
+    """Fetch Japanese-language issuer news and 開示 from kabutan.
+
+    The yfinance feed is English and US-editorial, so it covers globally-traded
+    names well and domestic financials/utilities poorly. Kabutan carries the
+    Japanese wire and the issuer's own disclosures, which is what the thin half
+    of the coverage actually needs.
+
+    Args:
+        code: Bare JPX code without a suffix, e.g. ``"8306"``.
+        limit: Maximum number of records to return.
+    """
+    from backtest.loaders._http import throttled_get
+
+    resp = throttled_get(
+        _KABUTAN_URL, host_key=_KABUTAN_HOST_KEY, min_interval=_KABUTAN_MIN_INTERVAL,
+        timeout=_KABUTAN_TIMEOUT, params={"code": code},
+    )
+    resp.raise_for_status()
+    table = _KABUTAN_TABLE_RE.search(resp.content.decode("utf-8", "replace"))
+    if not table:
+        return []
+
+    out: list[dict[str, Any]] = []
+    for row in _KABUTAN_ROW_RE.findall(table.group(1)):
+        link = _KABUTAN_LINK_RE.search(row)
+        if not link:
+            continue
+        href, title_html = link.groups()
+        title = _strip_html(title_html)
+        if not title:
+            continue
+        stamp = _KABUTAN_TIME_RE.search(row)
+        category = _KABUTAN_CTG_RE.search(row)
+        out.append({
+            "title": title,
+            "url": href if href.startswith("http") else f"https://kabutan.jp{href}",
+            "source": f"kabutan/{_strip_html(category.group(1))}" if category else "kabutan",
+            "published": stamp.group(1) if stamp else None,
+            "snippet": "",
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _merge_articles(groups: list[list[dict[str, Any]]], limit: int) -> list[dict[str, Any]]:
+    """Merge provider results newest-first, dropping duplicate titles."""
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for article in [a for group in groups for a in group]:
+        key = article["title"].casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(article)
+    # Undated rows sort last rather than crashing the comparison.
+    merged.sort(key=lambda a: (a.get("published") or ""), reverse=True)
+    return merged[:limit]
+
+
 class StockNewsTool(BaseTool):
     """Read-only per-stock and global financial news headlines."""
 
@@ -250,9 +373,12 @@ class StockNewsTool(BaseTool):
         "Fetch recent financial news headlines, read-only and no auth. Markets: "
         "China A-share (SH/SZ/BJ) returns Eastmoney news ARTICLES "
         "(title/url/source/published/snippet) under 'articles'. US (.US) and Hong "
-        "Kong (.HK) return Yahoo Finance news articles with the same fields. Use "
-        "scope 'stock' with a 'code', or scope 'global' (no code) for broad "
-        "China-market finance articles. "
+        "Kong (.HK) return Yahoo Finance news articles with the same fields. "
+        "Japan (.T) merges the English yfinance wire with kabutan's Japanese "
+        "wire and issuer 開示, newest first — alphanumeric JPX codes such as "
+        "285A.T work. Use scope 'stock' with a 'code', or scope 'global' (no "
+        "code) for broad China-market finance articles. For Japanese earnings "
+        "filings specifically, jp_earnings reads TDnet across the whole market. "
         'Example: {"code": "600519.SH", "scope": "stock", "limit": 10}.'
     )
     parameters = {
@@ -354,9 +480,11 @@ class StockNewsTool(BaseTool):
             return self._stock_via_eastmoney(code, query, limit)
         if suffix in _YAHOO_SUFFIXES:
             return self._stock_via_yahoo(code, query, limit)
+        if suffix in _JP_SUFFIXES:
+            return self._stock_via_japan(code, query, limit)
         return self._error(
             f"unsupported market for code {code!r}; expected suffix in "
-            f"{_EM_SUFFIXES + _YAHOO_SUFFIXES}"
+            f"{_EM_SUFFIXES + _YAHOO_SUFFIXES + _JP_SUFFIXES}"
         )
 
     def _stock_via_eastmoney(self, code: str, query: str, limit: int) -> str:
@@ -385,6 +513,37 @@ class StockNewsTool(BaseTool):
             "yahoo",
             {"scope": "stock", "code": code, "articles": articles},
         )
+
+    def _stock_via_japan(self, code: str, query: str, limit: int) -> str:
+        """Fetch Japanese-listing news from yfinance and kabutan together.
+
+        The two feeds are complementary rather than redundant — yfinance is
+        English wire coverage weighted toward globally-followed names, kabutan
+        is the Japanese wire plus the issuer's own 開示 — so both are queried and
+        merged newest-first. Either failing alone is logged and skipped; only a
+        total failure becomes an error envelope.
+        """
+        groups: list[list[dict[str, Any]]] = []
+        failures: list[str] = []
+
+        for label, fetch in (
+            ("yfinance", lambda: _fetch_yfinance_news(code, limit)),
+            ("kabutan", lambda: _fetch_kabutan_news(query, limit)),
+        ):
+            try:
+                groups.append(fetch())
+            except Exception as exc:  # noqa: BLE001 - one dead feed must not kill the other
+                logger.warning("%s news fetch failed for %s: %s", label, code, exc)
+                failures.append(f"{label}: {exc}")
+
+        if not groups:
+            return self._error(f"japan news fetch failed ({'; '.join(failures)})")
+
+        articles = _merge_articles(groups, limit)
+        payload: dict[str, Any] = {"scope": "stock", "code": code, "articles": articles}
+        if failures:
+            payload["partial"] = failures
+        return self._ok("jp", "yfinance+kabutan", payload)
 
     @staticmethod
     def _ok(market: str, source: str, data: dict[str, Any]) -> str:

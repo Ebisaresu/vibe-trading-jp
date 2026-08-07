@@ -127,6 +127,13 @@ class SymbolSearchTool(BaseTool):
         candidates: List[Dict[str, Any]] = []
         sources: Dict[str, str] = {}
 
+        # JPX first: it is the only source that can resolve a Japanese name.
+        # Yahoo's endpoint answers HTTP 400 to any non-ASCII query, and
+        # Eastmoney's Japanese hits are substring noise from its Chinese
+        # instrument table, so a kanji query finds nothing without this.
+        jpx_hits, sources["jpx"] = _search_jpx(query)
+        candidates.extend(jpx_hits)
+
         em_hits, sources["eastmoney"] = _search_eastmoney(query)
         candidates.extend(em_hits)
 
@@ -259,6 +266,43 @@ def _format_symbol(code: str, suffix: str) -> Optional[str]:
     if suffix == "HK":
         return f"{code.zfill(5)}.HK"
     return f"{code}.{suffix}"
+
+
+def _search_jpx(query: str) -> tuple[List[Dict[str, Any]], str]:
+    """Resolve a Japanese name, kana, or JPX code against the JPX listing master.
+
+    The master is a cached local table, so this arm costs nothing after the
+    first call and never fails the way a remote search can.
+
+    Note on bare codes: a four-digit query like "7203" is returned as a JPX
+    candidate, but it is *not* promoted above the other sources. Four- and
+    six-digit codes collide across markets (Eastmoney reports several Chinese
+    bonds whose codes contain "7203"), so the caller sees both and the ranking
+    stays merge-order rather than pretending Japan wins.
+
+    Returns:
+        ``(candidates, status)``; status is ``"ok"`` or a short error string.
+    """
+    try:
+        from src.tools import _jpx_universe as jpx
+
+        issues = jpx.resolve(query, limit=_PER_SOURCE_CAP)
+    except Exception as exc:  # noqa: BLE001 - one source failing is non-fatal
+        logger.warning("jpx symbol resolve failed for %r: %s", query, exc)
+        return [], f"jpx resolve failed: {exc}"
+
+    return [
+        {
+            "symbol": issue.symbol,
+            "name": issue.name,
+            "market": "jp",
+            "type": issue.segment,
+            "exchange": "JPX",
+            "source": "jpx",
+            "sector": issue.sector33 or None,
+        }
+        for issue in issues
+    ], "ok"
 
 
 def _search_yahoo(query: str) -> tuple[List[Dict[str, Any]], str]:

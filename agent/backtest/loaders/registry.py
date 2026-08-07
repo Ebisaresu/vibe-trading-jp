@@ -142,6 +142,10 @@ FALLBACK_CHAINS: dict[str, list[str]] = {
     "hk_equity": ["tencent", "eastmoney", "yahoo", "futu", "akshare", "yfinance", "tushare", "longbridge", "local"],
     "india_equity": ["yahoo", "yfinance", "india_broker", "local"],
     "kr_equity":   ["pykrx", "yahoo", "yfinance", "local"],
+    # Japan: yfinance is the only loader in the set that serves JPX. Yahoo's
+    # public chart endpoint follows it as a same-vendor second attempt; nothing
+    # else in the registry can resolve a .T code at all.
+    "jp_equity":   ["yfinance", "yahoo", "local"],
     # OKX first (native), then dedicated Binance, then generic CCXT / Yahoo.
     "crypto":    ["okx", "binance", "ccxt", "yfinance", "local"],
     "futures":   ["tushare", "akshare", "local"],

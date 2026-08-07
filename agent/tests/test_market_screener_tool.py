@@ -131,9 +131,17 @@ class TestErrorEnvelope:
         assert "market" in payload["error"]
 
     def test_invalid_market_rejected(self):
-        payload = json.loads(MarketScreenerTool().execute(market="jp"))
+        # "jp" is a supported market now; "de" stands in as the unsupported one.
+        payload = json.loads(MarketScreenerTool().execute(market="de"))
         assert payload["ok"] is False
         assert "market" in payload["error"]
+
+    def test_japan_is_a_supported_market(self):
+        # Japan bypasses Eastmoney entirely, so it must pass validation and
+        # reach the JPX path rather than being rejected at the enum.
+        payload = json.loads(MarketScreenerTool().execute(market="jp", universe="bogus"))
+        assert payload["ok"] is False
+        assert "universe" in payload["error"]
 
     def test_invalid_sort_by_rejected(self):
         payload = json.loads(

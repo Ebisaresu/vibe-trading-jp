@@ -26,6 +26,8 @@ _SECTION_MODULES: Dict[str, str] = {
     "institution_ownership": "institutionOwnership",
     "insider_holders": "insiderHolders",
     "recommendation_trend": "recommendationTrend",
+    "calendar": "calendarEvents",
+    "earnings_history": "earningsHistory",
 }
 _ALL_SECTIONS = tuple(_SECTION_MODULES)
 
@@ -98,6 +100,51 @@ def _financials(module: Dict[str, Any]) -> Dict[str, Any]:
             "totalDebt",
         ),
     )
+
+
+def _calendar(module: Dict[str, Any]) -> Dict[str, Any]:
+    """Shape calendarEvents into the next-earnings row.
+
+    ``is_estimate`` is the load-bearing field: when the company has not
+    announced a date, Yahoo extrapolates one from last year's cadence. Reporting
+    that guess as a scheduled date is how a brief invents an event.
+    """
+    earnings = module.get("earnings") or {}
+    return {
+        "earnings_dates": [
+            entry.get("fmt")
+            for entry in (earnings.get("earningsDate") or [])
+            if isinstance(entry, dict) and entry.get("fmt")
+        ],
+        "is_estimate": bool(earnings.get("isEarningsDateEstimate")),
+        "earnings_average": _raw(earnings.get("earningsAverage")),
+        "earnings_low": _raw(earnings.get("earningsLow")),
+        "earnings_high": _raw(earnings.get("earningsHigh")),
+        "revenue_average": _raw(earnings.get("revenueAverage")),
+        "ex_dividend_date": _raw(module.get("exDividendDate")),
+        "dividend_date": _raw(module.get("dividendDate")),
+    }
+
+
+def _earnings_history(module: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Shape earningsHistory into per-quarter actual-vs-consensus rows."""
+    rows: List[Dict[str, Any]] = []
+    for entry in (module.get("history") or [])[:_MAX_ROWS]:
+        if not isinstance(entry, dict):
+            continue
+        surprise = _raw(entry.get("surprisePercent"))
+        rows.append(
+            {
+                "quarter": (entry.get("quarter") or {}).get("fmt"),
+                "eps_actual": _raw(entry.get("epsActual")),
+                "eps_estimate": _raw(entry.get("epsEstimate")),
+                "eps_difference": _raw(entry.get("epsDifference")),
+                # Yahoo ships this as a fraction (0.428 = +42.8%); percent is
+                # what every caller actually wants to print.
+                "surprise_pct": round(surprise * 100, 2) if surprise is not None else None,
+            }
+        )
+    return rows
 
 
 def _earnings_trend(module: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -196,6 +243,8 @@ _SHAPERS = {
     "institution_ownership": _institution_ownership,
     "insider_holders": _insider_holders,
     "recommendation_trend": _recommendation_trend,
+    "calendar": _calendar,
+    "earnings_history": _earnings_history,
 }
 
 
@@ -227,7 +276,12 @@ def _resolve_sections(sections: Optional[List[str]]) -> List[str]:
 
 def _market_for(ticker: str) -> str:
     """Classify a ticker into a coarse market label for the envelope."""
-    return "hk" if ticker.strip().upper().endswith(".HK") else "us"
+    upper = ticker.strip().upper()
+    if upper.endswith(".HK"):
+        return "hk"
+    if upper.endswith(".T"):
+        return "jp"
+    return "us"
 
 
 class StockProfileTool(BaseTool):
@@ -235,13 +289,17 @@ class StockProfileTool(BaseTool):
 
     name = "get_stock_profile"
     description = (
-        "Fetch a read-only company profile for a US or Hong Kong listing from "
-        "Yahoo Finance: valuation key statistics, analyst price targets and "
-        "earnings/revenue estimates, institutional and insider ownership, and "
-        "the analyst recommendation trend. Use this for fundamentals and "
-        "consensus context, not for OHLCV price bars (use get_market_data). "
-        'Example: get_stock_profile(ticker="AAPL.US", '
-        'sections=["key_stats", "financials"]).'
+        "Fetch a read-only company profile for a US, Hong Kong or Japanese "
+        "(Tokyo, .T) listing from Yahoo Finance: valuation key statistics, "
+        "analyst price targets and earnings/revenue estimates, institutional "
+        "and insider ownership, the analyst recommendation trend, the next "
+        "earnings date (with a flag for whether it is confirmed or Yahoo's "
+        "estimate), and per-quarter EPS actual-vs-consensus history. Use this "
+        "for fundamentals and consensus context, not for OHLCV price bars "
+        "(use get_market_data). "
+        'Examples: get_stock_profile(ticker="AAPL.US", '
+        'sections=["key_stats", "financials"]); '
+        'get_stock_profile(ticker="7203.T", sections=["calendar", "earnings_history"]).'
     )
     parameters = {
         "type": "object",
@@ -249,8 +307,10 @@ class StockProfileTool(BaseTool):
             "ticker": {
                 "type": "string",
                 "description": (
-                    "US or HK symbol. US uses a bare or .US suffix (AAPL or "
-                    "AAPL.US); HK uses a zero-padded .HK code (00700.HK)."
+                    "US, HK or Japanese symbol. US uses a bare or .US suffix "
+                    "(AAPL or AAPL.US); HK uses a zero-padded .HK code "
+                    "(00700.HK); Japan uses the JPX code with a .T suffix "
+                    "(7203.T, and alphanumeric codes like 285A.T work too)."
                 ),
             },
             "sections": {
@@ -263,7 +323,9 @@ class StockProfileTool(BaseTool):
                     "Which profile sections to return. One or more of: "
                     "key_stats, financials, earnings_trend, "
                     "institution_ownership, insider_holders, "
-                    "recommendation_trend. Defaults to all sections."
+                    "recommendation_trend, calendar (next earnings date), "
+                    "earnings_history (EPS actual vs consensus and surprise "
+                    "percentage). Defaults to all sections."
                 ),
                 "default": list(_ALL_SECTIONS),
             },
