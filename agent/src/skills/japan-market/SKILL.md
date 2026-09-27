@@ -1,6 +1,6 @@
 ---
 name: japan-market
-description: Japanese equity market (JPX/TSE) analysis — Nikkei/TOPIX divergence, USD/JPY sensitivity, the 15:00 close against the US overnight session, TDnet earnings cadence, price limits and lot sizes, and the Prime/Standard/Growth segments. Use for any Tokyo-listed name or a Japanese daily market report.
+description: Japanese equity market (JPX/TSE) analysis — Nikkei/TOPIX divergence, USD/JPY sensitivity, the 15:30 close against the US overnight session, TDnet earnings cadence, price limits and lot sizes, and the Prime/Standard/Growth segments. Use for any Tokyo-listed name or a Japanese daily market report.
 category: asset-class
 ---
 # Japanese Equity Market Analysis
@@ -10,7 +10,7 @@ category: asset-class
 Tokyo is a two-index market with a currency overlay, trading in a session that
 closes before its dominant external driver opens. Most analytical mistakes made
 about it come from one of three places: reading the Nikkei as if it were the
-market, ignoring the yen, or comparing a 15:00 JST close against a US number
+market, ignoring the yen, or comparing a 15:30 JST close against a US number
 from the wrong day. This skill covers those, plus the JPX mechanics that change
 what a price move means.
 
@@ -48,15 +48,21 @@ domestic retail. Two consequences for a daily report:
 Intervention risk matters at the extremes: MoF verbal intervention typically
 precedes action, and a sharp yen reversal with no equity news is often the tell.
 
-### 3. The 15:00 seam
+### 3. The 15:30 seam
 
-The cash session runs 09:00–11:30 and 12:30–15:00 JST (the 前場/後場 split), then
-closes **before** the US opens. So:
+The cash session runs 09:00–11:30 and 12:30–15:30 JST (the 前場/後場 split), then
+closes **before** the US opens. The close moved from 15:00 to 15:30 on
+5 November 2024, with a closing auction whose order-acceptance period runs
+15:25–15:30; anything written before that date, and much written since, still
+says 15:00. So:
 
 - Tokyo's close reflects the *previous* US session. Comparing today's Nikkei
   close against today's S&P move is an off-by-one-session error.
 - Overnight US moves and USD/JPY drift are priced at the next open, which is why
   Tokyo gaps more than it trends intraday.
+- A filing stamped 15:00 now lands **inside** the session and is priced the same
+  day. Only a filing at 15:30 or later is a next-session event. Read the TDnet
+  timestamp before saying which session reacted.
 - Nikkei futures (SGX, CME) trade through the gap and are the honest read on
   "where Tokyo would be now", though this repo has no keyless futures feed.
 
@@ -81,8 +87,14 @@ closes **before** the US opens. So:
 
 The Japanese fiscal year overwhelmingly ends **31 March**, so Q1 短信 land in late
 July–early August, and the annual print in early-to-mid May. During those weeks
-several hundred filings a day arrive — mostly after the 15:00 close, which is
-why the next morning gaps.
+several hundred filings a day arrive — clustered at the 15:30 close and the
+hours after it, which is why the next morning gaps.
+
+Not all of them wait for the close. Across the 758 決算短信 and 業績予想の修正
+filed between 19 August and 25 September 2026, 35% were stamped exactly 15:30,
+31% later, and 33% arrived during trading hours — 11:00, 13:00 and 12:00 being
+the common intraday slots. That window is off-peak, so treat the split as
+indicative; the point is that an intraday print is ordinary, not an exception.
 
 Two filing types matter and are often confused:
 
