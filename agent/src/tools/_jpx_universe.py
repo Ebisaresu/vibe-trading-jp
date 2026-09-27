@@ -1,7 +1,7 @@
 """JPX listing master — the Japanese equity universe, fetched keyless from JPX.
 
 JPX publishes the full list of TSE-listed issues as a single Excel file
-(``data_j.xls``, ~830KB, refreshed monthly). It needs no key, no cookie and no
+(``data_j.xlsx``, ~230KB, refreshed monthly). It needs no key, no cookie and no
 session bootstrap, and it is the only source in this repo that carries Japanese
 company names, market segment, the 33-sector classification and TOPIX size
 class together. The screener, the symbol resolver and the earnings sweep all
@@ -30,10 +30,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_JPX_URL = (
-    "https://www.jpx.co.jp/markets/statistics-equities/misc/"
-    "tvdivq0000001vg2-att/data_j.xls"
-)
+_JPX_BASE = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/"
+# JPX republished the master as .xlsx in 2026 and the .xls path now answers 404.
+# Both are tried, newest first, so a second rename in either direction degrades
+# to one extra request instead of an empty Japanese universe.
+_JPX_URLS = (_JPX_BASE + "data_j.xlsx", _JPX_BASE + "data_j.xls")
 _HOST_KEY = "jpx"
 _MIN_INTERVAL = 1.0
 _TIMEOUT = 30.0
@@ -41,7 +42,7 @@ _TIMEOUT = 30.0
 # JPX refreshes the master monthly; a week keeps us current without re-pulling
 # 830KB on every report run.
 _CACHE_TTL_S = 7 * 24 * 3600
-_CACHE_NAME = "jpx_data_j.xls"
+_CACHE_NAME = "jpx_data_j.xlsx"
 
 # Header regexes, in the column order we expose. Matching is a substring search
 # on the raw header so "33業種区分" survives a whitespace or bracket change.
@@ -142,9 +143,14 @@ def _write_cache(payload: bytes) -> None:
 def _fetch() -> bytes:
     from backtest.loaders._http import throttled_get
 
-    resp = throttled_get(
-        _JPX_URL, host_key=_HOST_KEY, min_interval=_MIN_INTERVAL, timeout=_TIMEOUT
-    )
+    resp = None
+    for url in _JPX_URLS:
+        resp = throttled_get(
+            url, host_key=_HOST_KEY, min_interval=_MIN_INTERVAL, timeout=_TIMEOUT
+        )
+        if resp.status_code != 404:
+            break
+        logger.debug("jpx master not at %s, trying the next location", url)
     resp.raise_for_status()
     return resp.content
 
@@ -196,7 +202,9 @@ def load_universe(*, ttl_s: float = _CACHE_TTL_S, force_refresh: bool = False) -
         _write_cache(payload)
 
     # dtype=str keeps "285A" a string and stops pandas turning "1301" into an
-    # int and then into "1301.0" on the way back out.
+    # int and then into "1301.0" on the way back out. No engine is named: pandas
+    # picks xlrd or openpyxl from the payload itself, which is what lets one
+    # code path read either format JPX has published.
     frame = pd.read_excel(io.BytesIO(payload), dtype=str)
     cols = _resolve_columns(list(frame.columns))
 
