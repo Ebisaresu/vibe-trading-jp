@@ -6,6 +6,7 @@ Anything needing the network lives in the live probes under
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 
 import pytest
@@ -18,6 +19,7 @@ from src.tools.jp_earnings_tool import (
     JapanEarningsTool,
     _bare_code,
     _classify,
+    _empty_reason,
     _parse_tdnet_page,
 )
 from src.tools.stock_news_tool import _fetch_kabutan_news  # noqa: F401 - import guard
@@ -185,3 +187,98 @@ class TestJapanEarningsToolValidation:
             JapanEarningsTool().execute(mode="calendar", codes=[f"{i:04d}" for i in range(200)])
         )
         assert payload["ok"] is False and "cap" in payload["error"]
+
+
+class TestEmptyReason:
+    """An empty TDnet page must say why, because four causes look identical."""
+
+    TODAY = dt.date(2026, 9, 27)
+
+    @pytest.mark.parametrize(
+        ("date", "reason"),
+        [
+            ("20260928", "future"),
+            ("20260926", "weekend"),
+            # 秋分の日. Indistinguishable from a quiet day without a holiday table.
+            ("20260923", "market_holiday_or_no_filings"),
+            ("20260828", "market_holiday_or_no_filings"),
+            # 31 days back: past the floor, so the zero is not evidence.
+            ("20260827", "beyond_retention"),
+            ("20260807", "beyond_retention"),
+        ],
+    )
+    def test_reason(self, date: str, reason: str) -> None:
+        assert _empty_reason(date, self.TODAY) == reason
+
+
+class TestFetchMode:
+    """mode='fetch' archives filings; the network is stubbed throughout."""
+
+    ROW = {
+        "time": "15:30",
+        "code": "4716",
+        "name": "日本オラクル",
+        "title": "2027年5月期第1四半期決算短信〔日本基準〕(非連結)",
+        "kind": "earnings",
+        "url": "https://www.release.tdnet.info/inbs/140120260916537545.pdf",
+    }
+
+    class _Response:
+        def __init__(self, body: bytes) -> None:
+            self.content = body
+            self.status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def _stub(self, monkeypatch, tmp_path, body: bytes, calls: list[str]) -> None:
+        import backtest.loaders._http as http
+        import src.tools.jp_earnings_tool as tool
+
+        monkeypatch.setenv("VIBE_TRADING_HOME", str(tmp_path))
+        other = dict(self.ROW, code="7203", url=self.ROW["url"].replace("545", "999"))
+        monkeypatch.setattr(tool, "_fetch_tdnet", lambda date, pages: ([self.ROW, other], 1, False))
+
+        def fake_get(url: str, **_kwargs):
+            calls.append(url)
+            return self._Response(body)
+
+        monkeypatch.setattr(http, "throttled_get", fake_get)
+
+    def test_requires_codes(self) -> None:
+        payload = json.loads(JapanEarningsTool().execute(mode="fetch", date="2026-09-24"))
+        assert payload["ok"] is False
+        assert "codes" in payload["error"]
+
+    def test_saves_only_the_requested_issue(self, monkeypatch, tmp_path) -> None:
+        calls: list[str] = []
+        self._stub(monkeypatch, tmp_path, b"%PDF-1.7 body", calls)
+        payload = json.loads(
+            JapanEarningsTool().execute(mode="fetch", date="2026-09-24", codes=["4716.T"])
+        )
+        data = payload["data"]
+        assert (data["matched"], data["saved"], data["failed"]) == (1, 1, 0)
+        saved = tmp_path / "imports" / "tdnet" / "2026-09-24" / "4716_140120260916537545.pdf"
+        assert data["rows"][0]["path"] == str(saved)
+        assert saved.read_bytes() == b"%PDF-1.7 body"
+        assert calls == [self.ROW["url"]]
+
+    def test_second_run_reads_the_archive(self, monkeypatch, tmp_path) -> None:
+        calls: list[str] = []
+        self._stub(monkeypatch, tmp_path, b"%PDF-1.7 body", calls)
+        tool = JapanEarningsTool()
+        tool.execute(mode="fetch", date="2026-09-24", codes=["4716"])
+        payload = json.loads(tool.execute(mode="fetch", date="2026-09-24", codes=["4716"]))
+        assert payload["data"]["rows"][0]["cached"] is True
+        assert len(calls) == 1
+
+    def test_html_answer_is_not_saved_as_a_filing(self, monkeypatch, tmp_path) -> None:
+        # TDnet answers a removed filing with a 200 and an HTML page.
+        calls: list[str] = []
+        self._stub(monkeypatch, tmp_path, b"<html>not found</html>", calls)
+        payload = json.loads(
+            JapanEarningsTool().execute(mode="fetch", date="2026-09-24", codes=["4716"])
+        )
+        data = payload["data"]
+        assert (data["saved"], data["failed"]) == (0, 1)
+        assert not list((tmp_path / "imports").rglob("*.pdf"))

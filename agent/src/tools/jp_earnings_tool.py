@@ -1,7 +1,8 @@
 """Japanese earnings as EVENTS — what was just filed, what is coming, was it a beat.
 
 A daily report can miss an earnings print in three different ways, so this tool
-covers three surfaces, all keyless:
+covers three surfaces, plus the one that keeps a print readable afterwards. All
+keyless:
 
 ``mode="disclosures"``
     TDnet (適時開示情報閲覧サービス), the exchange's own filing feed. This is the
@@ -17,6 +18,15 @@ covers three surfaces, all keyless:
     Yahoo ``earningsHistory``. EPS actual against consensus with a surprise
     percentage, so a print can be characterised rather than merely noted.
 
+``mode="fetch"``
+    Saves the filing PDFs for named issues into the local archive and returns
+    their paths. Two facts make this a mode rather than a convenience. Yahoo
+    carries almost no quarterly statements for a JPX listing, so the 決算短信 is
+    the only source for the quarter's revenue and operating income. And TDnet
+    drops a filing after about a month, so a print that was not saved on the day
+    cannot be read later. The archive sits under ``imports/``, which
+    ``read_document`` already accepts.
+
 TDnet quirks worth knowing before reading the parser:
 
 * Codes carry a trailing check digit — ``65070`` is issue ``6507``, ``593A0`` is
@@ -25,6 +35,9 @@ TDnet quirks worth knowing before reading the parser:
   zero-padded to three digits. Pages exist only for business days.
 * Rows are plain ``<td>`` cells with no stable class attributes, so the parser
   keys off row structure and column order, not CSS classes.
+* A date outside the retention window answers exactly like a market holiday: no
+  page, no error. Measured on 2026-09-27, the oldest date still served was
+  2026-08-19, 39 days back.
 """
 
 from __future__ import annotations
@@ -33,6 +46,7 @@ import datetime as dt
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 from src.agent.tools import BaseTool
@@ -44,6 +58,18 @@ _TDNET_HOST_KEY = "tdnet"
 _TDNET_MIN_INTERVAL = 1.0
 _TDNET_TIMEOUT = 20.0
 _TDNET_MAX_PAGES = 25  # 100 rows/page; peak 決算 days run past 1000 filings.
+
+# TDnet publishes no retention figure. A month is the floor every measurement
+# has cleared, so an empty page older than this is reported as unknowable
+# rather than as a day on which nothing was filed.
+_TDNET_RETENTION_FLOOR_DAYS = 30
+
+_FETCH_CAP = 10  # One PDF per filing; a peak day has hundreds.
+_FETCH_MAX_BYTES = 30 * 1024 * 1024
+_PDF_MAGIC = b"%PDF"
+_PDF_NAME_RE = re.compile(r"([0-9A-Za-z]+)\.pdf$")
+
+_JST = dt.timezone(dt.timedelta(hours=9))
 
 _YAHOO_SWEEP_CAP = 60  # calendarEvents is one HTTP round-trip per symbol.
 
@@ -152,6 +178,72 @@ def _fetch_tdnet(date: str, max_pages: int) -> tuple[list[dict[str, Any]], int, 
     return rows, pages_read, False
 
 
+def _empty_reason(date: str, today: dt.date) -> str:
+    """Say why a TDnet date came back with no rows.
+
+    An empty page has four causes that read identically on the wire, and a
+    report that treats them alike will state "no filings" for a day it simply
+    could not see.
+
+    Args:
+        date: The requested date as YYYYMMDD.
+        today: Today's date in Tokyo.
+
+    Returns:
+        ``future``, ``weekend``, ``beyond_retention`` or
+        ``market_holiday_or_no_filings``.
+    """
+    day = dt.datetime.strptime(date, "%Y%m%d").date()
+    if day > today:
+        return "future"
+    if day.weekday() >= 5:
+        return "weekend"
+    if (today - day).days > _TDNET_RETENTION_FLOOR_DAYS:
+        return "beyond_retention"
+    return "market_holiday_or_no_filings"
+
+
+def _archive_dir(date: str) -> Path:
+    """Return the archive folder for one filing date (YYYYMMDD)."""
+    from src.config.paths import get_runtime_root
+
+    return get_runtime_root() / "imports" / "tdnet" / f"{date[:4]}-{date[4:6]}-{date[6:]}"
+
+
+def _save_pdf(url: str, target: Path) -> tuple[int, bool]:
+    """Download one TDnet PDF to ``target`` unless it is already there.
+
+    Returns:
+        ``(size_in_bytes, was_cached)``.
+
+    Raises:
+        ValueError: If the body is not a PDF or exceeds the size cap. TDnet
+            answers a removed filing with an HTML page and status 200, so the
+            status code alone cannot be trusted.
+    """
+    from backtest.loaders._http import throttled_get
+
+    if target.is_file() and target.stat().st_size > 0:
+        return target.stat().st_size, True
+    resp = throttled_get(
+        url, host_key=_TDNET_HOST_KEY, min_interval=_TDNET_MIN_INTERVAL,
+        timeout=_TDNET_TIMEOUT,
+    )
+    resp.raise_for_status()
+    body = resp.content
+    if not body.startswith(_PDF_MAGIC):
+        raise ValueError("response is not a PDF; the filing may have left TDnet")
+    if len(body) > _FETCH_MAX_BYTES:
+        raise ValueError(f"PDF is {len(body)} bytes, over the {_FETCH_MAX_BYTES} cap")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Write-then-rename so an interrupted download cannot be mistaken for a
+    # saved filing on the next run.
+    tmp = target.with_suffix(".tmp")
+    tmp.write_bytes(body)
+    tmp.replace(target)
+    return len(body), False
+
+
 def _sweep_calendar(symbols: list[str]) -> list[dict[str, Any]]:
     """Read the next earnings date for each symbol from Yahoo calendarEvents."""
     from backtest.loaders.yahoo_client import get_quote_summary
@@ -240,6 +332,10 @@ class JapanEarningsTool(BaseTool):
         "  mode='calendar' — next earnings date per symbol, with is_estimate "
         "telling you whether the company confirmed it or Yahoo guessed.\n"
         "  mode='surprise' — recent EPS actual vs consensus and surprise %.\n"
+        "  mode='fetch' — save the filing PDFs for codes=[...] on a date into the "
+        "local archive and return their paths for read_document. The 決算短信 is "
+        "the only source for a Japanese quarter's revenue and operating income, "
+        "and TDnet drops filings after about a month, so fetch on the day.\n"
         "Symbols may be '7203' or '7203.T'; alphanumeric codes like '285A' work."
     )
     parameters = {
@@ -247,21 +343,21 @@ class JapanEarningsTool(BaseTool):
         "properties": {
             "mode": {
                 "type": "string",
-                "enum": ["disclosures", "calendar", "surprise"],
+                "enum": ["disclosures", "calendar", "surprise", "fetch"],
                 "description": "Which earnings surface to read.",
             },
             "date": {
                 "type": "string",
                 "description": (
-                    "mode='disclosures' only. Filing date as YYYY-MM-DD or "
-                    "YYYYMMDD. Defaults to today (JST). TDnet publishes pages "
-                    "for business days only."
+                    "mode='disclosures' and 'fetch'. Filing date as YYYY-MM-DD "
+                    "or YYYYMMDD. Defaults to today (JST). TDnet publishes pages "
+                    "for business days only and keeps them about a month."
                 ),
             },
             "kind": {
                 "type": "string",
                 "description": (
-                    "mode='disclosures' only. Filter by classification: "
+                    "mode='disclosures' and 'fetch'. Filter by classification: "
                     "earnings, guidance, correction, earnings_material, buyback, "
                     "dividend, other. Omit for everything."
                 ),
@@ -270,8 +366,8 @@ class JapanEarningsTool(BaseTool):
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Symbols or bare JPX codes. Required for 'calendar' and "
-                    "'surprise'; optional filter for 'disclosures'."
+                    "Symbols or bare JPX codes. Required for 'calendar', "
+                    "'surprise' and 'fetch'; optional filter for 'disclosures'."
                 ),
             },
             "limit": {
@@ -292,21 +388,34 @@ class JapanEarningsTool(BaseTool):
             return self._disclosures(kwargs)
         if mode in ("calendar", "surprise"):
             return self._yahoo_sweep(mode, kwargs)
+        if mode == "fetch":
+            return self._fetch(kwargs)
         return self._error(
-            f"unknown mode {mode!r}; expected 'disclosures', 'calendar' or 'surprise'"
+            f"unknown mode {mode!r}; expected 'disclosures', 'calendar', "
+            "'surprise' or 'fetch'"
         )
 
-    def _disclosures(self, kwargs: dict[str, Any]) -> str:
+    @staticmethod
+    def _resolve_date(kwargs: dict[str, Any]) -> tuple[str | None, str | None]:
+        """Return ``(YYYYMMDD, None)`` or ``(None, error message)``."""
         raw_date = str(kwargs.get("date") or "").strip()
-        if raw_date:
-            digits = raw_date.replace("-", "").replace("/", "")
-            if not re.fullmatch(r"\d{8}", digits):
-                return self._error(f"invalid date {raw_date!r}; expected YYYY-MM-DD")
-            date = digits
-        else:
+        if not raw_date:
             # TDnet is a Tokyo service; "today" must be today in Tokyo, or a
             # report generated in the evening UTC asks for tomorrow's page.
-            date = dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).strftime("%Y%m%d")
+            return dt.datetime.now(_JST).strftime("%Y%m%d"), None
+        digits = raw_date.replace("-", "").replace("/", "")
+        if not re.fullmatch(r"\d{8}", digits):
+            return None, f"invalid date {raw_date!r}; expected YYYY-MM-DD"
+        try:
+            dt.datetime.strptime(digits, "%Y%m%d")
+        except ValueError:
+            return None, f"invalid date {raw_date!r}; no such calendar day"
+        return digits, None
+
+    def _disclosures(self, kwargs: dict[str, Any]) -> str:
+        date, problem = self._resolve_date(kwargs)
+        if date is None:
+            return self._error(problem or "invalid date")
 
         try:
             rows, pages, truncated = _fetch_tdnet(date, _TDNET_MAX_PAGES)
@@ -328,7 +437,7 @@ class JapanEarningsTool(BaseTool):
         for row in rows:
             counts[row["kind"]] = counts.get(row["kind"], 0) + 1
 
-        return self._ok("jp", "tdnet", {
+        data: dict[str, Any] = {
             "mode": "disclosures",
             "date": f"{date[:4]}-{date[4:6]}-{date[6:]}",
             "filings_on_date": total,
@@ -338,7 +447,65 @@ class JapanEarningsTool(BaseTool):
             "truncated": truncated,
             "kind_counts": counts,
             "rows": rows[:limit],
-        })
+        }
+        if total == 0:
+            data["empty_reason"] = _empty_reason(date, dt.datetime.now(_JST).date())
+        return self._ok("jp", "tdnet", data)
+
+    def _fetch(self, kwargs: dict[str, Any]) -> str:
+        codes = {c.split(".")[0].strip() for c in _normalize_symbols(kwargs.get("codes"))}
+        if not codes:
+            return self._error("mode='fetch' requires 'codes'")
+        date, problem = self._resolve_date(kwargs)
+        if date is None:
+            return self._error(problem or "invalid date")
+
+        try:
+            rows, _pages, _truncated = _fetch_tdnet(date, _TDNET_MAX_PAGES)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("tdnet fetch failed for %s: %s", date, exc)
+            return self._error(f"tdnet fetch failed: {exc}")
+
+        total = len(rows)
+        kind = str(kwargs.get("kind") or "").strip()
+        rows = [
+            r for r in rows
+            if r["code"] in codes and r["url"] and (not kind or r["kind"] == kind)
+        ]
+        matched = len(rows)
+        folder = _archive_dir(date)
+
+        saved: list[dict[str, Any]] = []
+        for row in rows[:_FETCH_CAP]:
+            name = _PDF_NAME_RE.search(row["url"])
+            entry = {k: row[k] for k in ("time", "code", "name", "title", "kind", "url")}
+            if name is None:
+                entry["error"] = "unexpected filing address"
+                saved.append(entry)
+                continue
+            target = folder / f"{row['code']}_{name.group(1)}.pdf"
+            try:
+                size, cached = _save_pdf(row["url"], target)
+                entry.update({"path": str(target), "bytes": size, "cached": cached})
+            except Exception as exc:  # noqa: BLE001 - one bad filing must not sink the rest
+                logger.debug("tdnet pdf failed for %s: %s", row["url"], exc)
+                entry["error"] = str(exc)[:200]
+            saved.append(entry)
+
+        data: dict[str, Any] = {
+            "mode": "fetch",
+            "date": f"{date[:4]}-{date[4:6]}-{date[6:]}",
+            "filings_on_date": total,
+            "matched": matched,
+            "saved": sum(1 for e in saved if "path" in e),
+            "failed": sum(1 for e in saved if "error" in e),
+            "skipped_over_cap": max(0, matched - _FETCH_CAP),
+            "archive": str(folder),
+            "rows": saved,
+        }
+        if total == 0:
+            data["empty_reason"] = _empty_reason(date, dt.datetime.now(_JST).date())
+        return self._ok("jp", "tdnet", data)
 
     def _yahoo_sweep(self, mode: str, kwargs: dict[str, Any]) -> str:
         symbols = _normalize_symbols(kwargs.get("codes"))
