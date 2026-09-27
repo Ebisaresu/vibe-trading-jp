@@ -26,7 +26,8 @@ cd /home/mtforestlab/projects/vibe-trading && env -i HOME=$HOME PATH=/usr/bin:/b
 | 値上がり率上位 | 同 `sort_by='change_pct'` |
 | 本日の決算短信 | `JapanEarningsTool().execute(mode='disclosures', kind='earnings', limit=40)` |
 | 業績予想の修正 | 同 `kind='guidance', limit=50` — **全件リスト化する（本レポートの差別化の核）** |
-| 翌営業日の決算予定 | 同 `mode='calendar', codes=[注目銘柄]` — `is_estimate` を必ず確認 |
+| 営業日の確認 | 同 `mode='trading_days', date=当日` — 当日が営業日か、前営業日・翌営業日の日付、今後30日の休場日 |
+| 翌営業日の決算予定 | 同 `mode='calendar', codes=[注目銘柄]` — `is_estimate` を必ず確認。`on_closed_day` が付いた日付は休場日なので予定として書かない |
 | 動いた銘柄のニュース | `StockNewsTool().execute(code=..., limit=6)` を2〜4銘柄 |
 
 ## タイトルの型
@@ -64,7 +65,7 @@ cd /home/mtforestlab/projects/vibe-trading && env -i HOME=$HOME PATH=/usr/bin:/b
 
 **５．翌営業日の注目** — 決算発表予定（`is_estimate` で確定/推定を明記）、
 監視すべき水準（当日データから導けるものだけ。例: ドル円158円、日経の当日安値）。
-祝日・休場はツールで確認できないため、確実に知っている場合のみ言及。
+翌営業日の日付と休場日は `mode='trading_days'` の返り値を使う（連休前は「翌営業日」が数日先になる）。
 
 **６．シナリオ** — メイン/リスクの2本。各シナリオに必ず**乗り換え条件**を付ける
 （「◯◯になったらこの見立ては捨てる」）。断定予測・目標株価・個別銘柄の
@@ -73,7 +74,7 @@ cd /home/mtforestlab/projects/vibe-trading && env -i HOME=$HOME PATH=/usr/bin:/b
 **７．答え合わせ** — 前日レポートのシナリオを検証。的中も外れも書く。
 外れた場合は「どの乗り換え条件が作動したか」を書く。
 初回のみ「本日の見立て（明日から検証開始）」とする。
-前日ファイル: `keyless-verification/note-daily-<前営業日>.md` を読むこと。
+前日ファイル: `keyless-verification/note-daily-<前営業日>.md` を読むこと。前営業日の日付は `mode='trading_days'` の `previous_trading_day`。
 
 **末尾（固定文）**:
 

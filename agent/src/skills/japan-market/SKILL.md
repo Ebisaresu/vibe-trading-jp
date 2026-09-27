@@ -115,6 +115,7 @@ Two filing types matter and are often confused:
 | Guidance revisions | `jp_earnings(mode="disclosures", kind="guidance")` |
 | Who reports next | `jp_earnings(mode="calendar", codes=[...])` — check `is_estimate` |
 | Was it a beat | `jp_earnings(mode="surprise", codes=[...])` |
+| Is it a trading day | `jp_earnings(mode="trading_days", date=...)` — also the previous and next session, and weekday closures ahead |
 | Keep a filing readable | `jp_earnings(mode="fetch", date=..., codes=[...])` — saves the PDFs for `read_document`; TDnet drops them after about a month |
 | Company news | `get_stock_news(code="7203.T")` — merges the English wire with kabutan's Japanese wire and 開示 |
 | Fundamentals | `get_stock_profile(ticker="7203.T")`, `get_financial_statements(code="7203.T")` — absolute JPY |

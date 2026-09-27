@@ -82,6 +82,8 @@ Notes:
   `screen_market` Japan universe is built from JPX's own listing master instead.
 - `jp_earnings` is the event surface for Japan: TDnet 適時開示 for what was filed
   today (決算短信 and 業績予想の修正), plus next-earnings dates and EPS surprise.
+  `mode="trading_days"` answers whether Tokyo trades on a date, from JPX's
+  closed-day list and the Cabinet Office holiday file.
   `mode="fetch"` saves a filing's PDFs locally — the only source for a Japanese
   quarter's revenue and operating income, since `get_financial_statements`
   returns almost no quarterly rows for `.T`.

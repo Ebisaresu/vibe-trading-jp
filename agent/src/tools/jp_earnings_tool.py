@@ -18,6 +18,12 @@ keyless:
     Yahoo ``earningsHistory``. EPS actual against consensus with a surprise
     percentage, so a print can be characterised rather than merely noted.
 
+``mode="trading_days"``
+    Whether a date is a trading day, the sessions either side of it, and the
+    weekday closures ahead. Every date the other modes return is read against
+    this: an estimated earnings date can land on a holiday, and "the next
+    session" after a 15:30 filing is not always tomorrow.
+
 ``mode="fetch"``
     Saves the filing PDFs for named issues into the local archive and returns
     their paths. Two facts make this a mode rather than a convenience. Yahoo
@@ -178,29 +184,67 @@ def _fetch_tdnet(date: str, max_pages: int) -> tuple[list[dict[str, Any]], int, 
     return rows, pages_read, False
 
 
-def _empty_reason(date: str, today: dt.date) -> str:
+def _empty_reason(date: str, today: dt.date, calendar: Any = None) -> str:
     """Say why a TDnet date came back with no rows.
 
-    An empty page has four causes that read identically on the wire, and a
+    An empty page has five causes that read identically on the wire, and a
     report that treats them alike will state "no filings" for a day it simply
     could not see.
 
     Args:
         date: The requested date as YYYYMMDD.
         today: Today's date in Tokyo.
+        calendar: A :class:`TradingCalendar`, or None when it could not be
+            loaded — in which case a holiday cannot be told from a quiet day.
 
     Returns:
-        ``future``, ``weekend``, ``beyond_retention`` or
-        ``market_holiday_or_no_filings``.
+        ``future``, ``weekend``, ``market_holiday``, ``beyond_retention``,
+        ``no_filings``, or ``market_holiday_or_no_filings`` without a calendar.
     """
     day = dt.datetime.strptime(date, "%Y%m%d").date()
     if day > today:
         return "future"
     if day.weekday() >= 5:
         return "weekend"
+    known = calendar.is_trading_day(day) if calendar is not None else None
+    if known is False:
+        return "market_holiday"
     if (today - day).days > _TDNET_RETENTION_FLOOR_DAYS:
         return "beyond_retention"
-    return "market_holiday_or_no_filings"
+    return "no_filings" if known else "market_holiday_or_no_filings"
+
+
+def _load_calendar() -> Any:
+    """Load the trading calendar, tolerating its absence."""
+    try:
+        from src.tools._jpx_calendar import load_calendar
+
+        return load_calendar()
+    except Exception as exc:  # noqa: BLE001 - the calendar annotates; it must not block
+        logger.debug("trading calendar unavailable: %s", exc)
+        return None
+
+
+def _flag_closed_dates(rows: list[dict[str, Any]], calendar: Any) -> None:
+    """Mark earnings dates that fall on a day the exchange is closed.
+
+    No company schedules a release for a market holiday, so a date that lands
+    on one is an extrapolation that failed — the clearest sign a row should not
+    be printed as a schedule.
+    """
+    if calendar is None:
+        return
+    for row in rows:
+        closed = []
+        for text in row.get("earnings_dates") or []:
+            try:
+                state = calendar.status(dt.date.fromisoformat(text))
+            except ValueError:
+                continue
+            if state["is_trading_day"] is False:
+                closed.append({"date": text, "reason": state["reason"], "name": state["name"]})
+        if closed:
+            row["on_closed_day"] = closed
 
 
 def _archive_dir(date: str) -> Path:
@@ -332,6 +376,9 @@ class JapanEarningsTool(BaseTool):
         "  mode='calendar' — next earnings date per symbol, with is_estimate "
         "telling you whether the company confirmed it or Yahoo guessed.\n"
         "  mode='surprise' — recent EPS actual vs consensus and surprise %.\n"
+        "  mode='trading_days' — is a date a trading day, the previous and next "
+        "sessions, and weekday closures in the coming weeks. From JPX's own "
+        "closed-day list and the Cabinet Office holiday file.\n"
         "  mode='fetch' — save the filing PDFs for codes=[...] on a date into the "
         "local archive and return their paths for read_document. The 決算短信 is "
         "the only source for a Japanese quarter's revenue and operating income, "
@@ -343,15 +390,16 @@ class JapanEarningsTool(BaseTool):
         "properties": {
             "mode": {
                 "type": "string",
-                "enum": ["disclosures", "calendar", "surprise", "fetch"],
+                "enum": ["disclosures", "calendar", "surprise", "fetch", "trading_days"],
                 "description": "Which earnings surface to read.",
             },
             "date": {
                 "type": "string",
                 "description": (
-                    "mode='disclosures' and 'fetch'. Filing date as YYYY-MM-DD "
-                    "or YYYYMMDD. Defaults to today (JST). TDnet publishes pages "
-                    "for business days only and keeps them about a month."
+                    "mode='disclosures', 'fetch' and 'trading_days'. Date as "
+                    "YYYY-MM-DD or YYYYMMDD. Defaults to today (JST). TDnet "
+                    "publishes pages for business days only and keeps them "
+                    "about a month."
                 ),
             },
             "kind": {
@@ -374,6 +422,13 @@ class JapanEarningsTool(BaseTool):
                 "type": "integer",
                 "description": "Maximum rows to return (default 50).",
             },
+            "days": {
+                "type": "integer",
+                "description": (
+                    "mode='trading_days' only. How many days ahead to list "
+                    "weekday closures for (default 30, at most 370)."
+                ),
+            },
             "quarters": {
                 "type": "integer",
                 "description": "mode='surprise' only. Quarters of history (default 4).",
@@ -390,10 +445,46 @@ class JapanEarningsTool(BaseTool):
             return self._yahoo_sweep(mode, kwargs)
         if mode == "fetch":
             return self._fetch(kwargs)
+        if mode == "trading_days":
+            return self._trading_days(kwargs)
         return self._error(
             f"unknown mode {mode!r}; expected 'disclosures', 'calendar', "
-            "'surprise' or 'fetch'"
+            "'surprise', 'fetch' or 'trading_days'"
         )
+
+    def _trading_days(self, kwargs: dict[str, Any]) -> str:
+        date, problem = self._resolve_date(kwargs)
+        if date is None:
+            return self._error(problem or "invalid date")
+        calendar = _load_calendar()
+        if calendar is None:
+            return self._error(
+                "trading calendar unavailable: neither the JPX closed-day list "
+                "nor the Cabinet Office holiday file could be read"
+            )
+        day = dt.datetime.strptime(date, "%Y%m%d").date()
+        raw_days = kwargs.get("days")
+        ahead = raw_days if isinstance(raw_days, int) and 1 <= raw_days <= 370 else 30
+        previous = calendar.previous_trading_day(day)
+        following = calendar.next_trading_day(day)
+        data = calendar.status(day)
+        data.update({
+            "mode": "trading_days",
+            "previous_trading_day": previous.isoformat() if previous else None,
+            "next_trading_day": following.isoformat() if following else None,
+            "closed_weekdays_ahead": calendar.closed_weekdays(
+                day, day + dt.timedelta(days=ahead)
+            ),
+            "days_ahead": ahead,
+            "coverage": {
+                "first": calendar.first.isoformat() if calendar.first else None,
+                "last": calendar.last.isoformat() if calendar.last else None,
+            },
+            "sources": calendar.sources,
+            "sources_disagree_on": calendar.disagreements,
+            "stale": calendar.stale,
+        })
+        return self._ok("jp", "jpx+cao", data)
 
     @staticmethod
     def _resolve_date(kwargs: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -449,7 +540,9 @@ class JapanEarningsTool(BaseTool):
             "rows": rows[:limit],
         }
         if total == 0:
-            data["empty_reason"] = _empty_reason(date, dt.datetime.now(_JST).date())
+            data["empty_reason"] = _empty_reason(
+                date, dt.datetime.now(_JST).date(), _load_calendar()
+            )
         return self._ok("jp", "tdnet", data)
 
     def _fetch(self, kwargs: dict[str, Any]) -> str:
@@ -504,7 +597,9 @@ class JapanEarningsTool(BaseTool):
             "rows": saved,
         }
         if total == 0:
-            data["empty_reason"] = _empty_reason(date, dt.datetime.now(_JST).date())
+            data["empty_reason"] = _empty_reason(
+                date, dt.datetime.now(_JST).date(), _load_calendar()
+            )
         return self._ok("jp", "tdnet", data)
 
     def _yahoo_sweep(self, mode: str, kwargs: dict[str, Any]) -> str:
@@ -519,6 +614,7 @@ class JapanEarningsTool(BaseTool):
 
         if mode == "calendar":
             rows = _sweep_calendar(symbols)
+            _flag_closed_dates(rows, _load_calendar())
         else:
             quarters = kwargs.get("quarters")
             quarters = quarters if isinstance(quarters, int) and 1 <= quarters <= 12 else 4

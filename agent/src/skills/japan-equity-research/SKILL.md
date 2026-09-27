@@ -43,7 +43,7 @@ read later. A company usually files two documents together: the 決算短信 and
 
 If `disclosures` returns no rows, read `empty_reason` before writing anything.
 `beyond_retention` means the date could not be seen. It does not mean nothing
-was filed.
+was filed. `market_holiday` means the exchange was closed.
 
 ### Step 2. Read the two documents differently
 
@@ -90,7 +90,9 @@ get_market_data(codes=["4716.T", "1306.T", "^N225"], start_date=<30 trading days
 ```
 
 1. **Which session reacted.** A filing stamped 15:30 or later is priced the next
-   trading day. One stamped earlier is priced the same day.
+   trading day. One stamped earlier is priced the same day. The next trading
+   day is not always tomorrow: take it from
+   `jp_earnings(mode="trading_days", date=<filing date>)`.
 2. **Price limit.** Take the band from the previous close and compare it with
    the day's high or low. If the limit was reached, describe a limit move, not a
    percentage.
@@ -142,13 +144,18 @@ About one second per symbol. Build the list from the JPX universe
 (`screen_market(market="jp")`) or from the names already in the report.
 
 - Print **確定 / 推定** on every row. `is_estimate: true` is a date Yahoo
-  extrapolated from last year, not a schedule. An extrapolated date can fall on
-  a market holiday, which no company would choose.
+  extrapolated from last year, not a schedule.
+- A row carrying `on_closed_day` has a date on which the exchange is shut. No
+  company schedules a release for a holiday, so print that row as 日付未定
+  rather than repeating the date.
+- List the weekday closures inside the window from
+  `jp_earnings(mode="trading_days", days=<window>)`, so a gap in the calendar
+  reads as a holiday and not as a quiet week.
 - Sort by date, and split "next two weeks" from the rest.
 - Replace an estimated date once the company announces. Companies file the
   announcement on TDnet (決算発表日のお知らせ), and `disclosures` will carry it.
 - State what the calendar leaves out: time of day, central bank meetings,
-  economic releases, shareholder meetings, market holidays.
+  economic releases, shareholder meetings.
 
 ## Workflow C: Thesis Check
 
@@ -190,5 +197,5 @@ For a name followed across quarters, keep a table and update it at each print.
   archive of saved filings is what builds a time series
 - **Time of day of an upcoming release** — inferable only from the company's
   past filing times on TDnet, within the retention window
-- **Market holidays** — no table in this repo; check a date against the
-  exchange calendar before calling it a trading day
+- **Trading days beyond next year** — the calendar ends where its sources do
+  (`coverage.last`). A later weekday is reported as unknown, not as open.
