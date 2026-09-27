@@ -21,5 +21,11 @@ Prose, tables, and figures from the source papers and reports are NOT
 reproduced in this repository. Only the mathematical formulas — which are
 factual content and not subject to copyright — are reimplemented here.
 
+The japan-equity-research skill (agent/src/skills/japan-equity-research) adapts
+the workflow structure of the equity-research plugin in
+anthropics/financial-services (https://github.com/anthropics/financial-services),
+licensed under the Apache License 2.0. The text is rewritten for Japanese
+listings and keyless data sources; no file from that repository is reproduced.
+
 This product bundles Inter and JetBrains Mono fonts from @fontsource 5.3.0
 under the SIL Open Font License 1.1. See frontend/public/fonts/LICENSE.
