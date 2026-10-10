@@ -56,6 +56,21 @@ MANUSCRIPT = """# 【決算メモ】テスト(0000)2026年 — 結論
 
 - 短信のリンク
 - 短信は `~/x/imports/tdnet/` に保存済み。
+
+<!-- note:cards -->
+| 確認項目 | 今回の結果 | 次回の確認点 |
+|---|---|---|
+| 成長が続くか | +26% | 30%台を保つか |
+| 利益は横ばいか | +1.9% | |
+
+<!-- note:skip -->
+## 8. 取得できなかったもの
+
+- 説明会の質疑
+
+## 出典
+
+- 短信
 """
 
 
@@ -117,3 +132,23 @@ def test_missing_summary_is_flagged(tmp_path: Path) -> None:
 )
 def test_wrap_counts_cjk_as_two_columns(text: str, width: int, lines: int) -> None:
     assert note_export._wrap(text, width).count("\n") + 1 == lines
+
+
+def test_cards_render_one_block_per_row(tmp_path: Path) -> None:
+    text = _export(tmp_path)
+    assert "**成長が続くか**\n- 今回の結果: +26%\n- 次回の確認点: 30%台を保つか\n" in text
+    assert "**利益は横ばいか**\n- 今回の結果: +1.9%\n" in text
+
+
+def test_skipped_section_is_dropped_up_to_the_next_heading(tmp_path: Path) -> None:
+    text = _export(tmp_path)
+    assert "取得できなかったもの" not in text
+    assert "説明会の質疑" not in text
+    assert "## 出典\n\n- 短信" in text
+
+
+def test_placeholders_are_counted(tmp_path: Path, capsys) -> None:
+    src = tmp_path / "memo.md"
+    src.write_text(MANUSCRIPT + "\n筆者は保有して【いません/います】。\n", encoding="utf-8")
+    assert note_export.main([str(src), "--no-render"]) == 1
+    assert "1 placeholders left" in capsys.readouterr().out

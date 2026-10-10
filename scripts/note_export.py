@@ -7,8 +7,14 @@ manuscript stays the source of truth; this output is regenerated each time.
 
 Conventions the manuscript follows (reports/article-rules.md, section 10):
 
-* ``<!-- note:image -->`` or ``<!-- note:list -->`` on the line before a
-  table overrides the size rule.
+* ``<!-- note:image -->``, ``<!-- note:list -->`` or ``<!-- note:cards -->``
+  on the line before a table overrides the size rule. Cards print one row
+  per block — the label in bold, the other columns as bullets — which is
+  how a text-heavy table survives a phone screen.
+* ``<!-- note:skip -->`` on the line before a heading drops that section
+  up to the next heading of the same or a higher level: the author's record
+  of what could not be sourced stays in the manuscript and out of the
+  article.
 * A line starting with ``要約:`` right after a table becomes the caption under
   its image, for readers who cannot see the picture. A table rendered as an
   image without one leaves ``【要約を書く】`` in the output.
@@ -42,7 +48,10 @@ _LEADING_NUMBER_RE = re.compile(r"^\d+(\.\d+)*\.\s*")
 # Widest a cell may be before its text wraps, in display columns (CJK = 2).
 _WRAP_WIDTH = 44
 
-_OVERRIDE_RE = re.compile(r"^<!--\s*note:(image|list)\s*-->\s*$")
+_OVERRIDE_RE = re.compile(r"^<!--\s*note:(image|list|cards)\s*-->\s*$")
+_SKIP_RE = re.compile(r"^<!--\s*note:skip\s*-->\s*$")
+_HEADING_RE = re.compile(r"^(#{1,6})\s")
+_PLACEHOLDER_RE = re.compile(r"【[^】]*】")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 
 # Japanese-capable fonts, most specific first. Linux hosts carry Noto; macOS
@@ -102,6 +111,7 @@ def parse(text: str) -> Document:
     doc = Document(title="")
     heading = ""
     override: str | None = None
+    skip_level: int | None = None  # depth of the heading being skipped
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -109,6 +119,19 @@ def parse(text: str) -> Document:
             doc.title = line[2:].strip()
             i += 1
             continue
+        if _SKIP_RE.match(line.strip()):
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            h = _HEADING_RE.match(nxt)
+            skip_level = len(h.group(1)) if h else 1
+            i += 1
+            continue
+        h = _HEADING_RE.match(line)
+        if skip_level is not None:
+            if h and len(h.group(1)) <= skip_level and not (i > 0 and _SKIP_RE.match(lines[i - 1].strip())):
+                skip_level = None  # this heading ends the skipped section
+            else:
+                i += 1
+                continue
         m = _OVERRIDE_RE.match(line.strip())
         if m:
             override = m.group(1)
@@ -256,6 +279,18 @@ def render_table(table: Table, out_path: Path) -> None:
     plt.close(fig)
 
 
+def _card_lines(table: Table) -> list[str]:
+    """Render a text-heavy table as one block per row."""
+    out: list[str] = []
+    for row in table.rows:
+        out.append(f"**{row[0] if row else ''}**")
+        for h, v in zip(table.header[1:], row[1:]):
+            if v:
+                out.append(f"- {h}: {v}")
+        out.append("")
+    return out[:-1] if out else out
+
+
 def _list_lines(table: Table) -> list[str]:
     """Render a small table as bullets: ``label: first value（rest）``.
 
@@ -295,7 +330,7 @@ def export(src: Path, out_dir: Path | None = None, *, render: bool = True) -> Pa
                 lines.append(f"![表{image_no}: {part.heading}]({rel})")
                 lines.append(part.summary or MISSING_SUMMARY)
             else:
-                lines.extend(_list_lines(part))
+                lines.extend(_card_lines(part) if part.mode == "cards" else _list_lines(part))
                 if part.summary:
                     lines.append(part.summary)
             continue
@@ -323,9 +358,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     out = export(args.source, args.out_dir, render=not args.no_render)
     text = out.read_text(encoding="utf-8")
-    missing = text.count(MISSING_SUMMARY)
-    print(f"wrote {out} ({len(text)} chars, {text.count('![表')} images, {missing} summaries missing)")
-    return 1 if missing else 0
+    # The title line may carry a tag such as 【決算メモ】; only the body is checked.
+    body = "\n".join(line for line in text.split("\n") if not line.startswith("題名:"))
+    placeholders = _PLACEHOLDER_RE.findall(body)
+    print(
+        f"wrote {out} ({len(text)} chars, {text.count('![表')} images, "
+        f"{len(placeholders)} placeholders left{': ' + ', '.join(placeholders) if placeholders else ''})"
+    )
+    return 1 if placeholders else 0
 
 
 if __name__ == "__main__":
