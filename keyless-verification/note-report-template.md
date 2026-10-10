@@ -6,7 +6,8 @@
 ## 実行条件
 
 - **実行時刻: 17:00 JST 以降**（大引けは 15:30。TDnet の開示は 15:30 ちょうどと 16:00 に集中し、17:00 まで続くため。15:30 直後の実行では当日の開示を取りこぼす）
-- 出力先: `keyless-verification/note-daily-YYYY-MM-DD.md`
+- 出力先: `reports/daily/note-daily-YYYY-MM-DD.md`（2026-10-10 以降。それ以前の分は `keyless-verification/` に残す）
+- 記事の種類と分担の規則: `reports/article-rules.md` を先に読むこと（日次記事で1社を深掘りしない。会社別メモの対象になる決算は3行サマリとリンクだけ）
 - 実行環境（APIキーゼロを空環境で保証する）:
 
 ```bash
@@ -74,7 +75,7 @@ cd /home/mtforestlab/projects/vibe-trading && env -i HOME=$HOME PATH=/usr/bin:/b
 **７．答え合わせ** — 前日レポートのシナリオを検証。的中も外れも書く。
 外れた場合は「どの乗り換え条件が作動したか」を書く。
 初回のみ「本日の見立て（明日から検証開始）」とする。
-前日ファイル: `keyless-verification/note-daily-<前営業日>.md` を読むこと。前営業日の日付は `mode='trading_days'` の `previous_trading_day`。
+前日ファイル: `reports/daily/note-daily-<前営業日>.md` を読むこと。前営業日の日付は `mode='trading_days'` の `previous_trading_day`。
 
 **末尾（固定文）**:
 

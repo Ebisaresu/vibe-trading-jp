@@ -120,7 +120,9 @@ get_market_data(codes=["4716.T", "1306.T", "^N225"], start_date=<30 trading days
 
 ### Step 6. Write the memo
 
-Fixed order. Keep it to what a reader can verify.
+Fixed order. Keep it to what a reader can verify. When the memo is for
+publication, `reports/article-rules.md` in this repository decides the paywall
+position, the title form and the cross-references; it takes precedence here.
 
 0. Three-line summary — result, guidance status, price reaction
 1. Results and what they are measured against
