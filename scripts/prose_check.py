@@ -92,6 +92,7 @@ _BULLET_RE = re.compile(r"^\s*(?:[-*]|\d+\.)\s+")
 # Lines and sections that are not the article's prose.
 _SKIP_PREFIXES = ("作成:", "手順:", "題名:", "同日の日次記事:", "前回の会社別メモ:", "━━━━━", "> **免責事項**", "**免責事項**")
 _SKIP_SECTIONS = ("出典", "免責")
+_SKIP_MARK_RE = re.compile(r"^\s*<!--\s*note:skip\s*-->\s*$")
 MIN_TOPICS_TO_FLAG = 3
 _URL_RE = re.compile(r"https?://\S+")
 _INLINE_RE = re.compile(r"`[^`]*`|\*\*|\[([^\]]*)\]\([^)]*\)")
@@ -171,15 +172,20 @@ def check_text(text: str) -> list[Finding]:
     findings: list[Finding] = []
     in_code = False
     in_skipped_section = False
+    skip_next_heading = False
     for no, raw in enumerate(text.split("\n"), start=1):
         if raw.strip().startswith("```"):
             in_code = not in_code
             continue
         if in_code or not raw.strip():
             continue
+        if _SKIP_MARK_RE.match(raw):
+            skip_next_heading = True  # the section under the next heading is internal
+            continue
         if raw.startswith("#"):
             title = raw.lstrip("#").strip()
-            in_skipped_section = any(title.startswith(name) for name in _SKIP_SECTIONS)
+            in_skipped_section = skip_next_heading or any(title.startswith(name) for name in _SKIP_SECTIONS)
+            skip_next_heading = False
             continue
         if in_skipped_section:
             continue
