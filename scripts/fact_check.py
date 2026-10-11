@@ -414,15 +414,15 @@ def check_file(
     ledger = ledger or auto_ledger
     if not sources.exists():
         hint = f"原資料の本文がない: {sources}(scripts/source_sheet.py を先に実行)"
-        return [Finding(0, "台帳", str(memo), hint, hard=require_ledger)], 0, 0
+        return [Finding(0, "読了表", str(memo), hint, hard=require_ledger)], 0, 0
     docs = source_sheet.load_sources(sources)
     findings: list[Finding] = []
     if not ledger.exists():
-        findings.append(Finding(0, "台帳", str(ledger), "原資料の台帳がない(scripts/source_sheet.py を実行し、全ページの要点を埋める)", hard=require_ledger))
+        findings.append(Finding(0, "読了表", str(ledger), "原資料の読了表がない(scripts/source_sheet.py を実行し、全ページの要点を埋める)", hard=require_ledger))
     else:
         left = source_sheet.ledger_placeholders(ledger)
         if left:
-            findings.append(Finding(0, "台帳", ledger.name, f"台帳に未記入が{len(left)}行ある: {', '.join(left[:5])}{'…' if len(left) > 5 else ''}"))
+            findings.append(Finding(0, "読了表", ledger.name, f"読了表に未記入が{len(left)}行ある: {', '.join(left[:5])}{'…' if len(left) > 5 else ''}"))
     more, cites, checked = check(memo.read_text(encoding="utf-8"), docs, strict=require_ledger)
     return findings + more, cites, checked
 

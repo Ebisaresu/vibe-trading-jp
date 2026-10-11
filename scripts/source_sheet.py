@@ -254,7 +254,7 @@ def render_ledger(docs: list[Doc], code: str, date: str, today: str | None = Non
     today = today or dt.date.today().isoformat()
     total = sum(len(d.pages) for d in docs)
     out = [
-        f"# 原資料の台帳: {code} {date} 開示分",
+        f"# 原資料の読了表: {code} {date} 開示分",
         "",
         f"作成: {today} / 保存先: `~/.vibe-trading/imports/tdnet/{date}/` / ページごとの本文は同じ場所の `{code}.sources.json`(リポジトリには置かない)",
         "",

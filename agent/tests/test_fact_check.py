@@ -152,11 +152,11 @@ def test_check_file_requires_a_filled_ledger(tmp_path: Path) -> None:
     sources.write_text(json.dumps({"code": "6323", "date": "2026-10-08", "docs": [d.to_json() for d in _docs()]}, ensure_ascii=False), encoding="utf-8")
     ledger = tmp_path / "2026-10-08.sources.md"
     findings, _, _ = fact_check.check_file(memo, sources, ledger)
-    assert [(f.rule, f.hard) for f in findings] == [("台帳", True)]
+    assert [(f.rule, f.hard) for f in findings] == [("読了表", True)]
     findings, _, _ = fact_check.check_file(memo, sources, ledger, require_ledger=False)
-    assert [(f.rule, f.hard) for f in findings] == [("台帳", False)]
+    assert [(f.rule, f.hard) for f in findings] == [("読了表", False)]
     ledger.write_text("| 1 | x | 3 | 【】 |\n- 問い: 【】\n", encoding="utf-8")
     findings, _, _ = fact_check.check_file(memo, sources, ledger)
-    assert findings[0].rule == "台帳" and "未記入が2行" in findings[0].hint
+    assert findings[0].rule == "読了表" and "未記入が2行" in findings[0].hint
     ledger.write_text("| 1 | x | 3 | 読んだ |\n- 問い: 書いた\n", encoding="utf-8")
     assert fact_check.check_file(memo, sources, ledger)[0] == []

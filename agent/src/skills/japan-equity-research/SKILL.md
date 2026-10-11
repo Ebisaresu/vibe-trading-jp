@@ -67,18 +67,18 @@ Units: a filing prints 百万円 and truncates (百万円未満切捨て).
 ```
 
 The first call writes two things: the page texts, next to the PDFs and
-outside the repository, and a ledger at
+outside the repository, and a reading sheet at
 `reports/companies/<code>/<date>.sources.md` with one row per page. Fill the
 要点 cell of every row by reading the page — a figure and a subject, not the
 heading copied — and the four closing bullets (the question the memo asks,
 the pages that answer it, what the company does not state and you will have
 to compute, what the summary page did not say). Write the memo from the
-ledger, not from the summary page.
+reading sheet, not from the summary page.
 
 Why: in three reviews the analyst persona found, every time, the answer to
 the memo's own question sitting two pages past where the memo stopped reading
 (the customer mix on 添付9, the segment split of the revised guidance on slide
-18, a loss-provision reversal in the balance sheet). A ledger with a 【】 left
+18, a loss-provision reversal in the balance sheet). A reading sheet with a 【】 left
 in it fails Step 6b.
 
 A document taken from the company site (a deck TDnet did not carry) goes in
@@ -178,7 +178,7 @@ For every citation the script takes the figures in that sentence or table
 row and looks for each on the cited page, reconciling units (797億円 against
 79,733 百万円; +22.8% against an index of 122.8). It fails on a page the
 document does not have, a cited page carrying none of the sentence's figures,
-a document the archive does not hold, and a ledger with 【】 left in it. A
+a document the archive does not hold, and a reading sheet with 【】 left in it. A
 single figure missing from the page is a warning that says where else the
 document carries it, or that nothing does — which means the figure is either
 your own arithmetic (say so) or a transcription error. `--where` finds the
@@ -240,7 +240,7 @@ For a name followed across quarters, keep a table and update it at each print.
    that the link expires.
 8. What could not be sourced is listed, not filled.
 9. Every page of every saved filing is read before the memo is written, and
-   the ledger (Step 2b) shows it. The memo is not published until
+   the reading sheet (Step 2b) shows it. The memo is not published until
    `scripts/fact_check.py` (Step 6b) passes.
 
 ## Known Gaps
