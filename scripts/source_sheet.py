@@ -56,7 +56,7 @@ _ATTACH_RE = re.compile(r"^[―－\-‐–—]\s*(\d{1,3})\s*[―－\-‐–—]
 _LONE_NUMBER_RE = re.compile(r"^(\d{1,3})$")
 _TRAILING_NUMBER_RE = re.compile(r"(?:Reserved\.?|Copyright.*?|reserved\.?)\s+(\d{1,3})$")
 _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
-_PLACEHOLDER_RE = re.compile(r"【[^】]*】")
+_PLACEHOLDER_RE = re.compile(r"【\s*】")  # the empty placeholder render_ledger writes; headings like 【連結】 must not match
 
 
 @dataclass
