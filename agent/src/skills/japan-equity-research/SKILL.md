@@ -59,6 +59,32 @@ was filed. `market_holiday` means the exchange was closed.
 Units: a filing prints 百万円 and truncates (百万円未満切捨て).
 `get_financial_statements` returns absolute yen. Never mix the two in one table.
 
+### Step 2b. Read every page, and leave a record of it
+
+```
+.venv/bin/python scripts/source_sheet.py 6323 2026-10-08
+.venv/bin/python scripts/source_sheet.py 6323 2026-10-08 --find 受注残高
+```
+
+The first call writes two things: the page texts, next to the PDFs and
+outside the repository, and a ledger at
+`reports/companies/<code>/<date>.sources.md` with one row per page. Fill the
+要点 cell of every row by reading the page — a figure and a subject, not the
+heading copied — and the four closing bullets (the question the memo asks,
+the pages that answer it, what the company does not state and you will have
+to compute, what the summary page did not say). Write the memo from the
+ledger, not from the summary page.
+
+Why: in three reviews the analyst persona found, every time, the answer to
+the memo's own question sitting two pages past where the memo stopped reading
+(the customer mix on 添付9, the segment split of the revised guidance on slide
+18, a loss-provision reversal in the balance sheet). A ledger with a 【】 left
+in it fails Step 6b.
+
+A document taken from the company site (a deck TDnet did not carry) goes in
+the same folder as `<code>_<kind>.pdf`, for example `9983_決算説明資料.pdf`;
+the kind in the filename is what the memo will cite.
+
 ### Step 3. Build the comparison
 
 | Row | Formula | Source |
@@ -136,6 +162,29 @@ position, the title form and the cross-references; it takes precedence here.
 7. What could not be sourced
 8. Sources with links, and the disclaimer
 
+Cite the page inline wherever a figure or a quotation comes from a filing:
+`(決算説明資料18ページ)`, `(決算短信 添付8ページ)`, `(同5ページ)` for the same
+document, and `(百万円、決算短信)` in a table heading for the whole table. A
+figure you computed says so in the same sentence (筆者の計算).
+
+### Step 6b. Reconcile the memo with the pages it cites
+
+```
+.venv/bin/python scripts/fact_check.py reports/companies/6323/2026-10-08.md
+.venv/bin/python scripts/fact_check.py reports/companies/6323/2026-10-08.md --where 1,038億円
+```
+
+For every citation the script takes the figures in that sentence or table
+row and looks for each on the cited page, reconciling units (797億円 against
+79,733 百万円; +22.8% against an index of 122.8). It fails on a page the
+document does not have, a cited page carrying none of the sentence's figures,
+a document the archive does not hold, and a ledger with 【】 left in it. A
+single figure missing from the page is a warning that says where else the
+document carries it, or that nothing does — which means the figure is either
+your own arithmetic (say so) or a transcription error. `--where` finds the
+page for a figure you have not cited yet. `scripts/note_export.py` runs the
+same check; it stops on a failure.
+
 ## Workflow B: Earnings Calendar
 
 ```
@@ -190,6 +239,9 @@ For a name followed across quarters, keep a table and update it at each print.
    are not committed to a public repository; link to TDnet instead and note
    that the link expires.
 8. What could not be sourced is listed, not filled.
+9. Every page of every saved filing is read before the memo is written, and
+   the ledger (Step 2b) shows it. The memo is not published until
+   `scripts/fact_check.py` (Step 6b) passes.
 
 ## Known Gaps
 

@@ -394,11 +394,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", type=Path, default=None, help="defaults to the manuscript's folder")
     parser.add_argument("--no-render", action="store_true", help="write the text only, skip the PNGs")
     parser.add_argument("--no-prose-check", action="store_true", help="skip the prose rules")
+    parser.add_argument("--no-fact-check", action="store_true", help="skip reconciling citations with the saved filings")
     args = parser.parse_args(argv)
     out = export(args.source, args.out_dir, render=not args.no_render)
     prose_failed = False
+    facts_failed = False
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     if not args.no_prose_check:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
         import prose_check
 
         findings = prose_check.check_file(args.source)
@@ -407,6 +409,17 @@ def main(argv: list[str] | None = None) -> int:
         hard = sum(1 for f in findings if f.hard)
         print(f"prose check: {hard} NG, {len(findings) - hard} 注意")
         prose_failed = hard > 0
+    if not args.no_fact_check:
+        import fact_check
+
+        # A memo from before the ledger existed gets a warning, not a failure;
+        # a memo whose ledger exists must have it filled and its pages right.
+        findings, cites, checked = fact_check.check_file(args.source, require_ledger=False)
+        for f in findings:
+            print(f.render())
+        hard = sum(1 for f in findings if f.hard)
+        print(f"fact check: {hard} NG, {len(findings) - hard} 注意 ({cites} citations, {checked} figures)")
+        facts_failed = hard > 0
     text = out.read_text(encoding="utf-8")
     # The title line may carry a tag such as 【決算メモ】; only the body is checked.
     body = "\n".join(line for line in text.split("\n") if not line.startswith("題名:"))
@@ -415,7 +428,7 @@ def main(argv: list[str] | None = None) -> int:
         f"wrote {out} ({len(text)} chars, {text.count('![表')} tables, {text.count('![図')} charts, "
         f"{len(placeholders)} placeholders left{': ' + ', '.join(placeholders) if placeholders else ''})"
     )
-    return 1 if (placeholders or prose_failed) else 0
+    return 1 if (placeholders or prose_failed or facts_failed) else 0
 
 
 if __name__ == "__main__":
