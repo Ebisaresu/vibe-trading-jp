@@ -11,6 +11,8 @@ Conventions the manuscript follows (reports/article-rules.md, section 10):
   on the line before a table overrides the size rule. Cards print one row
   per block — the label in bold, the other columns as bullets — which is
   how a text-heavy table survives a phone screen.
+* A ```` ```chart ```` fence declares a chart (see note_charts.py); it becomes a
+  PNG numbered 図N, with the same 要約 rule as an image table.
 * ``<!-- note:skip -->`` on the line before a heading drops that section
   up to the next heading of the same or a higher level: the author's record
   of what could not be sourced stays in the manuscript and out of the
@@ -80,6 +82,12 @@ class Table:
 
 
 @dataclass
+class ChartPart:
+    chart: object  # note_charts.Chart
+    summary: str | None = None
+
+
+@dataclass
 class Document:
     title: str
     parts: list[object] = field(default_factory=list)  # str lines or Table
@@ -136,6 +144,25 @@ def parse(text: str) -> Document:
         if m:
             override = m.group(1)
             i += 1
+            continue
+        if line.strip().startswith("```chart"):
+            j = i + 1
+            body: list[str] = []
+            while j < len(lines) and not lines[j].strip().startswith("```"):
+                body.append(lines[j])
+                j += 1
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import note_charts
+
+            part = ChartPart(note_charts.parse_chart("\n".join(body), heading))
+            k = j + 1
+            while k < len(lines) and not lines[k].strip():
+                k += 1
+            if k < len(lines) and lines[k].strip().startswith(SUMMARY_PREFIX):
+                part.summary = lines[k].strip()[len(SUMMARY_PREFIX):].strip()
+                j = k
+            doc.parts.append(part)
+            i = j + 1
             continue
         if line.lstrip().startswith("|") and i + 1 < len(lines) and _is_separator(lines[i + 1]):
             header = _cells(line)
@@ -319,7 +346,18 @@ def export(src: Path, out_dir: Path | None = None, *, render: bool = True) -> Pa
 
     lines: list[str] = [f"題名: {doc.title}", ""]
     image_no = 0
+    chart_no = 0
     for part in doc.parts:
+        if isinstance(part, ChartPart):
+            chart_no += 1
+            img = img_dir / f"chart{chart_no:02d}.png"
+            if render:
+                import note_charts
+
+                note_charts.render_chart(part.chart, img, _font_path())
+            lines.append(f"![図{chart_no}: {part.chart.title}]({img.relative_to(out_dir)})")
+            lines.append(part.summary or MISSING_SUMMARY)
+            continue
         if isinstance(part, Table):
             if part.mode == "image":
                 image_no += 1
@@ -374,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
     body = "\n".join(line for line in text.split("\n") if not line.startswith("題名:"))
     placeholders = _PLACEHOLDER_RE.findall(body)
     print(
-        f"wrote {out} ({len(text)} chars, {text.count('![表')} images, "
+        f"wrote {out} ({len(text)} chars, {text.count('![表')} tables, {text.count('![図')} charts, "
         f"{len(placeholders)} placeholders left{': ' + ', '.join(placeholders) if placeholders else ''})"
     )
     return 1 if (placeholders or prose_failed) else 0
