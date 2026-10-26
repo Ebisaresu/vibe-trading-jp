@@ -156,11 +156,15 @@ def _close(a: float, b: float) -> bool:
 def matches(fig: Figure, nums: set[float]) -> bool:
     if any(_close(fig.value, n) for n in nums):
         return True
+    decimals = len(fig.raw.split(".")[1].rstrip("%倍円株ポイント").strip()) if "." in fig.raw else 0
     if fig.unit in ("億円", "億ドル"):
         # The filing prints 百万円 (or 百万ドル); the memo rounds or truncates to 億,
-        # or keeps two decimals (4.14億ドル for 414百万ドル).
+        # or keeps two decimals (4.14億ドル for 414百万ドル). A slide that already
+        # prints 億円 may carry a decimal the memo dropped (570.4 for 570億円).
         return any(
-            _close(n / 100, fig.value) or (n >= 100 and (math.floor(n / 100) == fig.value or round(n / 100) == fig.value))
+            _close(n / 100, fig.value)
+            or (n >= 100 and (math.floor(n / 100) == fig.value or round(n / 100) == fig.value))
+            or (decimals <= 1 and _close(round(n, decimals), fig.value))
             for n in nums
         )
     if fig.unit == "万円":
@@ -331,25 +335,26 @@ def check(memo: str, docs: list[source_sheet.Doc], *, strict: bool = True) -> tu
                     pages.append(p)
             if t.labels and not pages:
                 continue
-            target_pages = pages or doc.pages
-            if figs and t.labels and not any(matches(f, set().union(*(nums_of[(doc.name, p.index)] for p in pages))) for f in figs):
-                labels = "・".join(p.label for p in pages)
-                if sum(len(nums_of[(doc.name, p.index)]) for p in pages) < _IMAGE_PAGE_NUMBERS:
-                    hint = f"{doc.name}{labels}ページは文字層に数字がない(画像のページ)。目で確かめる"
-                    findings.append(Finding(sc.line, "ページ", sc.text, hint, hard=False))
-                    continue
-                where = _where(figs, docs)
-                hint = f"{doc.name}{labels}ページに文中の数字が一つもない。" + (f"見つかった場所: {where}" if where else "どの資料にもない")
-                if calc:
-                    hint += "(算出の文なので、計算の元の数字がそのページにあれば可)"
-                findings.append(Finding(sc.line, "ページ", sc.text, hint, hard=not calc))
-                if not calc:
-                    continue  # the page is wrong; listing each figure as missing adds nothing
-            cited.append((doc, target_pages))
+            cited.append((doc, pages or doc.pages, bool(t.labels)))
         if not figs or not cited:
             continue
         checked += len(figs)
-        union: set[float] = set().union(*(nums_of[(d.name, p.index)] for d, ps in cited for p in ps))
+        union: set[float] = set().union(*(nums_of[(d.name, p.index)] for d, ps, _ in cited for p in ps))
+        # A sentence may cite two pages for two figures; the page is wrong only
+        # when none of the cited pages carries any of the sentence's figures.
+        explicit = [(d, ps) for d, ps, is_page in cited if is_page]
+        if explicit and not any(matches(f, union) for f in figs):
+            labels = "、".join(f"{d.name}{'・'.join(p.label for p in ps)}ページ" for d, ps in explicit)
+            if sum(len(nums_of[(d.name, p.index)]) for d, ps in explicit for p in ps) < _IMAGE_PAGE_NUMBERS:
+                findings.append(Finding(sc.line, "ページ", sc.text, f"{labels}は文字層に数字がない(画像のページ)。目で確かめる", hard=False))
+                continue
+            where = _where(figs, docs)
+            hint = f"{labels}に文中の数字が一つもない。" + (f"見つかった場所: {where}" if where else "どの資料にもない")
+            if calc:
+                hint += "(算出の文なので、計算の元の数字がそのページにあれば可)"
+            findings.append(Finding(sc.line, "ページ", sc.text, hint, hard=not calc))
+            if not calc:
+                continue  # the page is wrong; listing each figure as missing adds nothing
         for f in figs:
             if matches(f, union):
                 continue
@@ -365,11 +370,11 @@ def _miss_hint(
     calc: bool,
 ) -> str:
     if f.specific:
-        for doc, pages in cited:
+        for doc, pages, _ in cited:
             elsewhere = [p.label for p in doc.pages if p not in pages and matches(f, nums_of[(doc.name, p.index)])]
             if elsewhere:
                 return f"{f.raw} は{doc.name}の{'・'.join(elsewhere[:4])}ページにある"
-        other = [d.name for d in docs if all(d is not c for c, _ in cited) and any(matches(f, nums_of[(d.name, p.index)]) for p in d.pages)]
+        other = [d.name for d in docs if all(d is not c for c, _, _ in cited) and any(matches(f, nums_of[(d.name, p.index)]) for p in d.pages)]
         if other:
             return f"{f.raw} は引用した資料にはなく、{'・'.join(other)}にある"
     tail = "(算出の文なので、筆者の計算なら可)" if calc else "(筆者の計算なら「筆者の計算」と書く。違うなら転記の誤り)"

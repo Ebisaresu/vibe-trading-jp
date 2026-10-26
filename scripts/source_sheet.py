@@ -54,7 +54,8 @@ _KINDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 _ATTACH_RE = re.compile(r"^[―－\-‐–—]\s*(\d{1,3})\s*[―－\-‐–—]$")
 _LONE_NUMBER_RE = re.compile(r"^(\d{1,3})$")
-_TRAILING_NUMBER_RE = re.compile(r"(?:Reserved\.?|Copyright.*?|reserved\.?)\s+(\d{1,3})$")
+# "All Rights Reserved. 14", "© 2026 YASKAWA Electric Corporation 7": the page number trails a copyright line.
+_TRAILING_NUMBER_RE = re.compile(r"(?:Reserved\.?|Copyright.*?|reserved\.?|©.*?)\s+(\d{1,3})$")
 _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _PLACEHOLDER_RE = re.compile(r"【\s*】")  # the empty placeholder render_ledger writes; headings like 【連結】 must not match
 
@@ -169,6 +170,28 @@ def page_label(lines: list[str], index: int, kind: str) -> str:
     return str(index)
 
 
+def normalise_labels(pages: list[Page]) -> None:
+    """Snap a deck's printed numbers to one offset from the PDF index.
+
+    Text extraction doubles a slide number now and then ("© 2026 X Corp 22"
+    for slide 2) or reads a chart value as the number. When most pages agree
+    on index − label = k, every page gets index − k; the outliers were noise.
+    """
+    from collections import Counter
+
+    diffs = Counter(p.index - int(p.label) for p in pages if p.label.isdigit())
+    if not diffs:
+        return
+    k, votes = diffs.most_common(1)[0]
+    # Dividers and the cover carry no number and vote for k = 0; a plurality
+    # of half the deck is enough when it is three pages or more.
+    if votes < 3 or votes * 2 < len(pages):
+        return
+    for p in pages:
+        # A cover before slide 1 gets no number, so it cannot collide with slide 1.
+        p.label = str(p.index - k) if p.index - k >= 1 else f"p{p.index}"
+
+
 def dedupe_labels(pages: list[Page]) -> None:
     """Two pages must not answer to one citation; the later one keeps its PDF index."""
     seen: set[str] = set()
@@ -210,6 +233,8 @@ def build_doc(path: Path, position: int) -> Doc:
                 numbers=len(_NUMBER_RE.findall(text)),
             )
         )
+    if kind != "決算短信":
+        normalise_labels(doc.pages)
     dedupe_labels(doc.pages)
     return doc
 
